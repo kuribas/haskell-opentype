@@ -1,0 +1,25 @@
+Name:		truetype
+Version: 	0.0.1
+Synopsis:	Truetype loading and writing
+Category: 	Typography
+Copyright: 	Kristof Bastiaensen (2014)
+Stability:	Unstable
+License:	BSD3
+License-file:	LICENSE
+Author:		Kristof Bastiaensen
+Maintainer:	Kristof Bastiaensen
+Bug-Reports: 	https://github.com/kuribas/truetype/issues
+Build-type:	Simple
+Cabal-version:	>=1.8
+Description:	This library supports loading and writing of truetype files.
+ 
+source-repository head
+  type:		git
+  location:	https://github.com/kuribas/truetype
+
+Library
+  Ghc-options: -Wall
+  Build-depends: base >= 3 && < 5, containers >= 0.5.3, vector >= 0.10,  bytestring > 0.10.0, time > 1.4.0
+  Exposed-Modules:
+    Data.Truetype
+

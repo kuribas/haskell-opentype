@@ -116,7 +116,7 @@ instance Binary CMapIntern where
     MapFormat8 -> putMap8 cmap
     MapFormat10 -> putMap10 cmap
     MapFormat11 -> putMap11 cmap
-  -- | 32 bit segmented coverage
+  -- 32 bit segmented coverage
     MapFormat12 -> putMap12 cmap
 
   get = undefined

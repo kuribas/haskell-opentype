@@ -8,7 +8,7 @@ module Data.Truetype
          -- * Glyf table
          GlyfTable(..), Glyph(..), CurvePoint(..), Instructions, GlyphComponent(..),
          -- * CMap table
-         CmapTable(..), CMap(..), PlatformID(..), RangeSegment(..), RangeSegment32(..), CodeMap(..)
+         CmapTable(..), CMap(..), PlatformID(..)
        ) where
 import Data.Truetype.Types
 import Data.Truetype.Head

@@ -1,8 +1,13 @@
-module Data.Truetype.Head where
+module Data.Truetype.Head (HeadTable(..)) where
 import Data.Truetype.Types
 import Data.Time
+import Data.Binary
+import Data.Binary.Get
+import Data.Binary.Put
+import Control.Monad
 import Data.Int
-import Data.Word
+import Data.Bits
+
 
 -- | This table contains global information about the font. it
 -- records such facts as the font version number, the creation and
@@ -67,11 +72,11 @@ data HeadTable = HeadTable {
   -- code point ranges and don’t truly represent support for those
   -- code points. If unset, indicates that the glyphs encoded in the
   -- cmap subtables represent proper support for those code points.
-  
-  -- bit 15 zero
   lastResortFont :: Bool,
   -- | Valid range is from 16 to 16384. This value should be a power
   -- of 2 for fonts that have TrueType outlines.
+
+  -- bit 15 zero
   unitsPerEm :: Word16,
   created :: UTCTime,  modified :: UTCTime,
   -- | For all glyph bounding boxes
@@ -94,9 +99,96 @@ data HeadTable = HeadTable {
   -- | Smallest readable size in pixels.
   lowerRecPPEM :: Word16,
   -- | deprecated, set to 2
-  fontDirectionHint :: Word16,
+  fontDirectionHint :: Int16,
   -- | 0 for short offsets, 1 for long.
-  indexToLocFormat :: Word16,
+  indexToLocFormat :: Int16,
   -- | 0 for current format
   glyphDataFormat :: Int16
   }
+
+instance Binary HeadTable where
+  get = do
+    major <- getWord16be
+    minor <- getWord16be
+    when (major /= 1 && minor /= 0)
+      (fail "Invalid head table")
+    revision <- getWord32be
+    _ <- getWord32be
+    magic <- getWord32be
+    when (magic /= 0x5F0F3CF5)
+      (fail "Invalid magic value in head table")
+    flags <- getWord16be
+    uPe <- getWord16be
+    created_ <- getInt64be
+    modified_ <- getInt64be
+    xMin_ <- getInt16be
+    yMin_ <- getInt16be
+    xMax_ <- getInt16be
+    yMax_ <- getInt16be
+    mcStyle <- getWord16be
+    lRec <- getWord16be
+    fDir <- getInt16be
+    iToL <- getInt16be
+    gd <- getInt16be
+    let flagAt = byteAt flags
+        styleAt = byteAt mcStyle
+    return $ HeadTable 0x00010000 revision
+      (flagAt 0) (flagAt 1) (flagAt 2) (flagAt 3)
+      (flagAt 4) (flagAt 5) (flagAt 7) (flagAt 8) (flagAt 9)
+      (flagAt 10) (flagAt 11) (flagAt 12) (flagAt 13) (flagAt 14) 
+      uPe (getTime created_) (getTime modified_)
+      xMin_ yMin_ xMax_ yMax_
+      (styleAt 0) (styleAt 1) (styleAt 2) (styleAt 3) (styleAt 4)
+      (styleAt 5) (styleAt 6) lRec fDir iToL gd
+
+  put headTbl = do
+  putWord16be 1
+  putWord16be 0
+  putWord32be $ fontRevision headTbl
+  putWord32be 0
+  putWord32be 0x5F0F3CF5
+  putWord16be $ makeFlag $ map ($ headTbl)
+    [baselineYZero, sidebearingXZero, pointsizeDepend, integerScaling, alterAdvanceWidth,
+    const False, verticalFont, linguisticRenderingLayout, metamorphosisEffects, rightToLeftGlyphs,
+    indicRearrangements, losslessFontData, convertedFont, clearTypeOptimized, lastResortFont, const False]
+  putWord16be $ unitsPerEm headTbl
+  putInt64be $ putTime $ created headTbl
+  putInt64be $ putTime $ modified headTbl
+  putInt16be $ xMin headTbl
+  putInt16be $ yMin headTbl
+  putInt16be $ xMax headTbl
+  putInt16be $ yMax headTbl
+  putWord16be $ makeFlag $ map ($ headTbl)
+    [boldStyle, italicStyle, underlineStyle, shadowStyle, condensedStyle, extendedStyle]
+  putWord16be $ lowerRecPPEM headTbl
+  putInt16be $ fontDirectionHint headTbl
+  putInt16be $ indexToLocFormat headTbl
+  putInt16be $ glyphDataFormat headTbl
+
+byteAt :: Word16 -> Int -> Bool
+byteAt flag i = flag `shift` i /= 0      
+
+makeFlag :: [Bool] -> Word16
+makeFlag l =
+  fromIntegral $ sum $ zipWith (*) (iterate (*2) 1) $
+  map fromEnum l
+
+secDay :: Int64
+secDay = 60 * 60 * 24
+
+diffSeconds :: Int64
+diffSeconds =
+  secDay * fromIntegral (fromGregorian 1858 11 17 `diffDays` fromGregorian 1904 1 1)
+
+getTime :: Int64  -> UTCTime
+getTime secs = UTCTime (ModifiedJulianDay $ fromIntegral d) (secondsToDiffTime $ fromIntegral t)
+  where (d,t) = (secs - diffSeconds) `quotRem` fromIntegral secDay
+
+putTime :: UTCTime -> Int64
+putTime (UTCTime (ModifiedJulianDay d) t) =
+  fromIntegral d * secDay + diffTimeToSeconds t + diffSeconds
+
+diffTimeToSeconds :: DiffTime -> Int64
+diffTimeToSeconds d =
+  fromIntegral $ diffTimeToPicoseconds d `quot` 1000000000
+

@@ -19,7 +19,7 @@ source-repository head
 
 Library
   Ghc-options: -Wall
-  Build-depends: base >= 3 && < 5, binary >= 0.7.1.0, bytestring > 0.10.0, containers >= 0.5.3, ghc >= 7.8.3, time > 1.4.0, vector >= 0.10
+  Build-depends: base >= 3 && < 5, binary >= 0.8.1.0, bytestring > 0.10.0, containers >= 0.5.3, ghc >= 7.10.0, time > 1.4.0, vector >= 0.10
   Exposed-Modules:
     Data.Truetype
-
+    

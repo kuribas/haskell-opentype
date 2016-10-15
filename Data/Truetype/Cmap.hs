@@ -5,7 +5,9 @@ import Data.Binary.Put
 import Data.Binary.Get
 import Data.List (sort)
 import Control.Monad
-import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString.Lazy as Lazy
+import qualified Data.ByteString as Strict
+import Data.ByteString.Unsafe
 import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import Data.Maybe
@@ -67,18 +69,19 @@ data PlatformID =
   MicrosoftPlatform
   deriving (Ord, Eq)
 
-instance Binary PlatformID where
-  put UnicodePlatform = putWord16be 0
-  put MacintoshPlatform = putWord16be 1
-  put MicrosoftPlatform = putWord16be 3
+putPf :: PlatformID -> Put
+putPf UnicodePlatform = putWord16be 0
+putPf MacintoshPlatform = putWord16be 1
+putPf MicrosoftPlatform = putWord16be 3
 
-  get = do
-    a <- getWord16be
-    case a of
-      0 -> return UnicodePlatform
-      1 -> return MacintoshPlatform
-      3 -> return MicrosoftPlatform
-      _ -> fail "illegal platformID."
+getPf :: Get PlatformID
+getPf = do
+  a <- getWord16be
+  case a of
+    0 -> return UnicodePlatform
+    1 -> return MacintoshPlatform
+    3 -> return MicrosoftPlatform
+    _ -> fail "unknown platformID."
 
 data CMap = CMap {
   platformID :: PlatformID,
@@ -131,21 +134,125 @@ putMap0 cmap = do
     putWord8 $ fromIntegral $
     fromMaybe 0 (IM.lookup c gm)
 
-getMap0 :: PlatformID -> Word16 -> Int -> Get CMapIntern
-getMap0 pfID encID size =
-  if size /= 262 then
-    fail "invalid map format 0"
-  else do
-    lang <- getWord16be
-    gmap <-
-      liftM IM.fromAscList $
-      forM [0..255] $ \c ->
-      do gid <- getWord8
-         return (c, fromIntegral gid)
-    return $ CMapIntern $
-      CMap pfID encID lang MapFormat0 IS.empty gmap
-  
-putMap2 = undefined
+index16 :: Strict.ByteString -> Int -> Either String Word16
+index16 bs i
+  | Strict.length bs * 2 - 1 < i ||
+    i < 0 = Left "Out of Bounds"
+  | otherwise = Right $ b1 * 256 + b2
+  where
+    b1, b2 :: Word16
+    b1 = fromIntegral $ unsafeIndex bs (i*2)
+    b2 = fromIntegral $ unsafeIndex bs (i*2 + 1)
+
+getMap0 :: PlatformID -> Word16 -> Strict.ByteString -> Either String CMap
+getMap0 pfID encID bs =
+  if Strict.length bs /= 258 then
+    Left "invalid map format 0"
+  else
+    do lang <- index16 bs 0
+       let gmap = IM.fromAscList $
+             (flip map) [0..255] $ \c ->
+             (fromIntegral c, fromIntegral $ Strict.index bs (c+2))
+       Right $ CMap pfID encID lang MapFormat0 IS.empty gmap
+
+subIntMap :: Int -> Int -> IM.IntMap Word16 -> IM.IntMap Word16
+subIntMap from to intMap =
+  fst $ IM.split (fromIntegral to) $ snd $
+  IM.split (fromIntegral from-1) intMap
+
+putCodes :: Int -> Int -> [(Int, Word16)] -> Put
+putCodes start end []
+  | start < end = do putWord16be 0
+                     putCodes (start+1) end []
+  | otherwise = putWord16be 0
+      
+putCodes start end l@((i, code):rest)
+  | start < i = do putWord16be 0
+                   putCodes (start+1) end l 
+  | otherwise = do putWord16be code
+                   putCodes (i+1) end rest
+
+subCodes :: IM.IntMap Word16 -> Int -> Int -> Put
+subCodes set start end =
+  putCodes start end $ IM.toList $ subIntMap start end set
+
+data SubTable2 = SubTable2 {
+  firstCode :: Word16,
+  entryCount :: Word16,
+  rangeOffset :: Word16,
+  rangeBytes :: Put
+  }
+
+putMap2 :: CMap -> PutM ()
+putMap2 cmap = do
+  putWord16be 2
+  putWord16be len
+  putWord16be (macLanguage cmap)
+  putCodes 1 255 $ zip highBytes [(1)..]
+  forM_ subTables $ \(SubTable2 fc ec ro _) ->
+    do putWord16be fc
+       putWord16be ec
+       putWord16be 0
+       putWord16be ro
+  forM_ subTables rangeBytes
+    where
+      highBytes :: [Int]
+      highBytes =
+        IS.toAscList $ fst $
+        IS.split 255 (multiByte cmap)
+      subTables = scanl calcSubTable firstTable highBytes
+      firstTable =
+        SubTable2 0 256 (fromIntegral $ length highBytes * 8 + 2) $
+        subCodes (glyphMap cmap) 0 255
+      len :: Word16
+      len = 512 + 6 + 8 * (fromIntegral $ length highBytes+1) + 2 * sum (map entryCount subTables)
+      calcSubTable prev hb =
+        SubTable2 (fromIntegral fstCode) (fromIntegral ec) (rangeOffset prev + 2*entryCount prev - 8) rb 
+        where
+          subMap =
+            subIntMap (hb * 256) (hb * 256 + 255) $
+            glyphMap cmap
+          fstCode = fst $ IM.findMin subMap
+          lstCode = fst $ IM.findMax subMap
+          ec = lstCode - fstCode + 1
+          rb = subCodes subMap fstCode lstCode
+
+getMap2 :: PlatformID -> Word16 -> Strict.ByteString -> Either String CMap
+getMap2 pfID encID bs = do
+  lang <- index16 bs 0
+  highBytes <- do
+    l <- mapM (index16 bs) [1..256]
+    Right $ map fst $ filter ((/=0).snd) $ zip [0..255] l
+  l <- forM (0:highBytes) $ \i -> do
+    fstCode <- index16 bs (fromIntegral $ 259 + i*4)
+    cnt <- index16 bs (fromIntegral $ 259 + i*4 + 1)
+    delta <- index16 bs (fromIntegral $ 259 + i*4 + 2)
+    ro <- index16 bs (fromIntegral $ 259 + i*4 + 3)
+    forM [0 .. fromIntegral cnt-1] $ \entry -> do
+      p <- index16 bs (fromIntegral $ 259 + i*4 - 2 + ro + entry)
+      Right (fromIntegral $ fstCode + entry, if p == 0 then 0 else p + delta)
+  let im = IM.fromAscList $ filter ((/= 0).snd) $ concat l
+      is = IS.fromAscList $ map fromIntegral highBytes
+  Right $ CMap pfID encID lang MapFormat2 is im      
+      
+data Segment4 = SegmentRange Int Int Int
+              | SegmentCodes Int Int [Word16]
+
+findRange :: Int -> Int -> Int -> [(Int, Int)] -> (Segment4, [(Int, Int)])
+findRange start nextI nextC [] =
+  (SegmentRange start (nextI-1) (nextC-1), [])
+findRange start nextI nextC ((i,c):r)
+  | i == nextI && c == nextC = findRange start (nextI+1) (nextC+1) r
+  | otherwise = (SegmentRange start (nextI-1) (nextC-1), r)
+
+findCodes :: Int -> [(Int, Int)] -> ([Int], [(Int, Int)])
+findCodes _ [] = ([], [])
+findCodes prevI l@((i,c):r)
+  -- maximum gap is 4
+  | i - prevI > 4 = ([], l)
+  | otherwise = (replicate (i-prevI-1) 0 ++ c:c2, r2)
+  where (c2, r2) = findCodes i r
+          
 putMap4 = undefined
 putMap6 = undefined
 putMap8 = undefined
@@ -154,15 +261,17 @@ putMap11 = undefined
 putMap12 = undefined
 
 data MapFormat = 
-  -- | array of the first 256 glyphs (DEPRECATED)
+  -- | legacy 8 bit encoding, contiguous block of the first 256 bytes
   MapFormat0 |
-  -- | mixed 8/16 bit encoding (DEPRECATED)
+  -- | legacy mixed 8/16 bit encoding 
   MapFormat2 |
-  -- | 16 bit encoding with holes
+  -- | 16 bit encoding with holes.  This should contain the BMP for a
+  -- unicode font.
   MapFormat4 |
-  -- | trimmed 16 bit mapping.
+  -- | 16 bit single contiguous block (trimmed).  Useful For a block
+  -- without holes.
   MapFormat6 |
-  -- | mixed 16/32 bit encoding (DEPRECATED)
+  -- | legacy encoding, mixed 16/32 bit
   MapFormat8 |
   MapFormat10 |
   MapFormat11 |
@@ -175,7 +284,7 @@ instance Binary CmapTable where
        putWord16be $ fromIntegral $ length cmaps
        forM_ (zip offsets cmaps) $
          \(len, CMap pfID encID _ _ _ _) ->
-         do put pfID
+         do putPf pfID
             putWord16be encID
             putWord32be len
        mapM_ putLazyByteString cmapsBs 
@@ -184,14 +293,14 @@ instance Binary CmapTable where
            offsets :: [Word32]
            offsets =
              scanl (+) (fromIntegral $ 8 * length cmaps) $
-             map (fromIntegral . BS.length) cmapsBs
+             map (fromIntegral . Lazy.length) cmapsBs
            cmapsBs = map (encode . CMapIntern) cmaps
     
   get = do
     _ <- getWord16be
     n <- liftM fromIntegral getWord16be
     entries <- replicateM n $ do
-      pfID <- get :: Get PlatformID
+      pfID <- getPf :: Get PlatformID
       encID <- getWord16be
       _offset <- getWord32be
       return (pfID, encID)

@@ -7,7 +7,7 @@ import Data.Int
 -- stored as 16384 (0x4000) and -1.0 is stored as -16384 (0xc000).
 type ShortFrac = Int16
 -- | signed fixed-point number
-type Fixed = Word16
+type Fixed = Word32
 -- | FWord describes a quantity in FUnits, the smallest
 -- measurable distance in em space.
 type FWord = Int16

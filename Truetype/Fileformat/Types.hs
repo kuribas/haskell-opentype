@@ -1,4 +1,4 @@
-module Data.Truetype.Types where
+module Truetype.Fileformat.Types where
 import Data.Word
 import Data.Int
 

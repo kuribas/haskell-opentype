@@ -1,8 +1,8 @@
-module Data.Truetype
+module Truetype.Fileformat
        (-- * types
          ShortFrac, Fixed, FWord, UFWord, F2Dot14, GlyphID,
          -- * Main datatype
-         ScalerType (..), TrueTypeFont (..),
+         TruetypeFont (..),
          -- * Head table
          HeadTable(..),
          -- * Glyf table
@@ -10,14 +10,14 @@ module Data.Truetype
          -- * CMap table
          CmapTable(..), CMap(..), PlatformID(..)
        ) where
-import Data.Truetype.Types
-import Data.Truetype.Head
-import Data.Truetype.Glyph
-import Data.Truetype.Cmap
+import Truetype.Types
+import Truetype.Head
+import Truetype.Glyph
+import Truetype.Cmap
 import Data.Int
 import Data.List (sort)
 import Data.Word
-import qualified Data.ByteString.Lazy as BS
+import qualified Data.ByteString.Lazy as Lazy
 import Data.Binary
 import Data.Binary.Put
 import Data.Binary.Get
@@ -28,35 +28,43 @@ import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import qualified Data.Vector as V
 
-data ScalerType =
-  -- | for TrueType fonts  
-  TrueTypeScaler |
-  -- | for old style of PostScript font housed in a sfnt wrapper
-  Type1Scaler |
-  -- | an OpenType font with PostScript outlines
-  OpenTypeScaler
+type GenericTables = M.Map String Lazy.ByteString
 
-data TrueTypeFont = TTOutlineFont {
-  scaler :: ScalerType,
+data SFont = TruetypeSFont TruetypeFont |
+             OpentypeSFont OpentypeFont |
+             OtherSfont OtherFont
+
+data OpentypeTables = OpentypeTables {
   head :: HeadTable,
   cmap :: CmapTable,
-  glyf :: GlyfTable,
   hhea :: HheaTable,
   hmtx :: HmtxTable,
   maxp :: MaxpTable,
   name :: NameTable,
   post :: PostTable,
-  othertables :: M.Map String BS.ByteString} |
-                    TTBitmapFont {
-  scaler :: ScalerType,
-  head :: HeadTable,
-  cmap :: CmapTable }
-  
+  os2 :: Maybe OS2Table,  
+  otherTables :: GenericTables
+  }
 
-    
+data TruetypeFont = TruetypeFont {
+  ttCommon :: OpentypeTables,
+  glyf :: GlyfTable,
+  fpgm :: Maybe FpgmTable
+  }
+
+data OpentypeFont = OpentypeFont {
+  otCommon :: OpentypeTables,
+  cff :: CffTable
+  }
+
+data OtherFont =
+  OtherFont GenericTables
 
 data HheaTable = HheaTable
 data HmtxTable = HmtxTable
 data MaxpTable = MaxpTable
 data NameTable = NameTable
+data OS2Table = OS2Table
 data PostTable = PostTable
+data CffTable = CffTable
+data FpgmTable = FpgmTable

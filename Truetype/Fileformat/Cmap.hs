@@ -3,7 +3,7 @@ import Truetype.Fileformat.Types
 import Data.Binary
 import Data.Binary.Put
 import Data.Binary.Get
-import Data.List (sort)
+import Data.List (sort, mapAccumL)
 import Data.Either (either)
 import Control.Monad
 import Data.Traversable (for)
@@ -190,33 +190,33 @@ instance Binary CMapIntern where
         12 -> getMap12 bs
         i -> fail $ "unkown encoding type " ++ show i
 
-index16 :: Strict.ByteString -> Int -> Either String Word16
+index16 :: Strict.ByteString -> Word16 -> Either String Word16
 index16 bs i
-  | Strict.length bs * 2 - 1 < i ||
+  | Strict.length bs * 2 - 1 < fromIntegral i ||
     i < 0 = Left "Out of Bounds"
   | otherwise = Right $ b1 * 256 + b2
   where
     b1, b2 :: Word16
-    b1 = fromIntegral $ unsafeIndex bs (i*2)
-    b2 = fromIntegral $ unsafeIndex bs (i*2 + 1)
+    b1 = fromIntegral $ unsafeIndex bs (fromIntegral $ i*2)
+    b2 = fromIntegral $ unsafeIndex bs (fromIntegral $ i*2 + 1)
 
 subIntMap :: Int -> Int -> IM.IntMap a -> IM.IntMap a
 subIntMap from to intMap =
   fst $ IM.split (fromIntegral to) $ snd $
   IM.split (fromIntegral from-1) intMap
 
-extractTypeFrom :: b -> [(a, b)] -> b
-extractTypeFrom a b = a
+asSubtypeFrom :: b -> [(a, b)] -> b
+asSubtypeFrom a _ = a
 
 -- Put codes in range, and use zero glyph when no code is found.
 putCodes :: (Num a, Binary a) => Int -> Int -> [(Int, a)] -> Put
 putCodes start end l@[]
-  | start < end = do put (0 `extractTypeFrom` l)
+  | start < end = do put (0 `asSubtypeFrom` l)
                      putCodes (start+1) end l
-  | otherwise = put (0 `extractTypeFrom` l)
+  | otherwise = put (0 `asSubtypeFrom` l)
       
 putCodes start end l@((i, code):rest)
-  | start < i = do put (0 `extractTypeFrom` l)
+  | start < i = do put (0 `asSubtypeFrom` l)
                    putCodes (start+1) end l 
   | otherwise = do put code
                    putCodes (i+1) end rest
@@ -261,7 +261,7 @@ putMap2 cmap = do
   putWord16be 2
   putWord16be len
   putWord16be (macLanguage cmap)
-  putCodes 1 255 $ zip highBytes [(1::Word16)..]
+  putCodes 1 255 $ zip highBytes [1::Word16 ..]
   for_ subTables $ \(SubTable2 fc ec ro _) ->
     do putWord16be fc
        putWord16be ec
@@ -308,17 +308,17 @@ getMap2 bs = do
       is = IS.fromAscList $ map fromIntegral highBytes
   Right $ CMap UnicodePlatform 0 lang MapFormat2 is im      
       
-data Segment4 = SegmentRange Int Int Int
-              | SegmentCodes Int Int [Word16]
+data Segment4 = RangeSegment Int Int Word16
+              | CodeSegment Int Int [Word16]
 
-findRange :: Int -> Int -> Int -> [(Int, Int)] -> (Segment4, [(Int, Int)])
-findRange start nextI nextC [] =
-  (SegmentRange start (nextI-1) (nextC-1), [])
-findRange start nextI nextC ((i,c):r)
-  | i == nextI && c == nextC = findRange start (nextI+1) (nextC+1) r
-  | otherwise = (SegmentRange start (nextI-1) (nextC-1), r)
+findRange :: Int -> Int -> [(Int, Word16)] -> (Int, [(Int, Word16)])
+findRange nextI _ [] =
+  (nextI-1, [])
+findRange nextI offset l@((i,c):r)
+  | i == nextI && fromIntegral c == nextI+offset = findRange (nextI+1) offset r
+  | otherwise = (nextI-1, l)
 
-findCodes :: Int -> [(Int, Int)] -> ([Int], [(Int, Int)])
+findCodes :: Int -> [(Int, Word16)] -> ([GlyphID], [(Int, Word16)])
 findCodes _ [] = ([], [])
 findCodes prevI l@((i,c):r)
   -- maximum gap is 4
@@ -326,17 +326,108 @@ findCodes prevI l@((i,c):r)
   | otherwise = (replicate (i-prevI-1) 0 ++ c:c2, r2)
   where (c2, r2) = findCodes i r
 
-putMap4 :: CMap -> Put
-putMap4 cmap = undefined
+getSegments :: [(Int, Word16)] -> [Segment4]
+getSegments [] = []
+getSegments l@((start, c):_)
+  | end - start >= 8 =
+      RangeSegment start (end-start) (c+fromIntegral (end-start)) :
+      getSegments r
+  | otherwise =
+      CodeSegment start (length codes) codes :
+      getSegments r2
+  where
+    (end, r) = findRange start (fromIntegral c - start) l
+    (codes, r2) = findCodes (start-1) l
 
-putMap6 = undefined
+data Segment4layout = Segment4layout {
+  s4endCode :: Word16,
+  s4startCode :: Word16,
+  s4idDelta :: Word16,
+  s4idRangeOffset :: Word16,
+  s4glyphIndex :: [GlyphID] }
+  
+putMap4 :: CMap -> PutM ()
+putMap4 cmap = do
+  putWord16be 4
+  putWord16be size
+  putWord16be (macLanguage cmap)
+  putWord16be (segCount*2)
+  putWord16be searchRange
+  putWord16be $ 2*segCount - searchRange
+  mapM_ (put.s4endCode) layout
+  putWord16be 0
+  mapM_ (put.s4startCode) layout
+  mapM_ (put.s4idDelta) layout
+  mapM_ (put.s4idRangeOffset) layout
+  mapM_ (mapM_ put.s4glyphIndex) layout
+    where
+      size, segCount, searchRange, entrySelector :: Word16
+      entrySelector = iLog2 segCount
+      searchRange = 2^(entrySelector+1)
+      segments = getSegments $ IM.toList $ glyphMap cmap
+      (codeSize, layout) = mapAccumL foldLayout (segCount*2) segments
+      foldLayout offset (RangeSegment start len code) =
+        (offset-2, Segment4layout (fromIntegral $ start + len) (fromIntegral start) (code-(fromIntegral start)) 0 [])
+      foldLayout offset (CodeSegment start len codes) =
+        (offset+fromIntegral len-2, Segment4layout (fromIntegral $ start+len) (fromIntegral start) 0 offset codes)
+      size = 8*segCount + codeSize + 16
+      segCount = fromIntegral $ length segments
+
+getMap4 :: Strict.ByteString -> Either String CMap
+getMap4 bs = do
+    lang <- index16 bs 0
+    segCount <- (`quot` 2) <$> index16 bs 3
+    gmap <- fmap (IM.fromAscList . concat) $ for [1::Word16 .. segCount] $
+      \i -> do
+          idDelta <- index16 bs (i + 6 + segCount*2)
+          endCode <- index16 bs (i + 5)
+          startCode <- index16 bs (i + 6 + segCount)
+          idRangeOffset <- index16 bs (i + 6 + segCount*3)
+          if idRangeOffset == 0
+            then Right [(fromIntegral c, c+idDelta) | c <- [startCode .. endCode]]
+            else for [1..endCode-startCode+1] $ \j ->
+            do glyph <- index16 bs (fromIntegral $ i + 6 + segCount*3 + idRangeOffset + j)
+               Right (fromIntegral $ startCode + j, glyph)
+    Right $ CMap UnicodePlatform 0 lang MapFormat4 IS.empty gmap
+
+putMap6 :: CMap -> PutM ()
+putMap6 cmap = do
+  putWord16be 6
+  putWord16be size
+  putWord16be (macLanguage cmap)
+  putWord16be fCode
+  putWord16be eCount
+  subCodes (glyphMap cmap) (fromIntegral fCode) (fromIntegral lastCode)
+  where
+    size, eCount, fCode, lastCode :: Word16
+    size = eCount*2 + 14
+    eCount = lastCode - fCode
+    fCode = fromIntegral $
+      min (fromIntegral (maxBound :: Word16)::Int) $
+      fst $ IM.findMin (glyphMap cmap)
+    lastCode = fromIntegral $
+      min (fromIntegral (maxBound :: Word16)::Int) $
+      fst $ IM.findMax (glyphMap cmap)
+    
+
+getMap6 :: Strict.ByteString -> Either String CMap
+getMap6 bs = do
+  lang <- index16 bs 0
+  fCode <- index16 bs 1
+  eCount <- index16 bs 2
+  gmap <- fmap IM.fromAscList  $ for [1..eCount] $ \i -> do
+    g <- index16 bs (i+3)
+    Right (fromIntegral $ i + fCode, g)
+  Right $ CMap UnicodePlatform 0 lang MapFormat6 IS.empty gmap
+
+
 putMap8 = undefined
 putMap10 = undefined
 putMap11 = undefined
 putMap12 = undefined
 
-getMap4 bs = undefined
-getMap6 bs = undefined
+
+
 getMap8 bs = undefined
 getMap10 bs = undefined
 getMap11 bs = undefined

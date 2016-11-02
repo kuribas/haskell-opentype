@@ -19,3 +19,9 @@ type F2Dot14 = Int16
 
 type GlyphID = Word16
 
+-- return smallest power of 2 <= i 
+iLog2 :: Integral a => a -> a
+iLog2 = iLog2' 0 where
+  iLog2' base i
+    | i > 0 = iLog2' (base+1) (i `quot` 2) 
+    | otherwise = base-1

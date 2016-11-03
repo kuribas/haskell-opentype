@@ -98,9 +98,9 @@ data HeadTable = HeadTable {
   extendedStyle :: Bool,
   -- | Smallest readable size in pixels.
   lowerRecPPEM :: Word16,
-  -- | deprecated, set to 2
+  -- | deprecated, will be set to 2
   fontDirectionHint :: Int16,
-  -- | 0 for short offsets, 1 for long.
+  -- | 0 for short offsets, 1 for long.  Will be automatically written.
   indexToLocFormat :: Int16,
   -- | 0 for current format
   glyphDataFormat :: Int16

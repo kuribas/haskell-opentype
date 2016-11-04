@@ -3,7 +3,7 @@ import Truetype.Fileformat.Types
 import Data.Binary
 import Data.Binary.Put
 import Data.Binary.Get
-import Data.List (sort, mapAccumL)
+import Data.List (sort, mapAccumL, foldl')
 import Data.Either (either)
 import Control.Monad
 import Data.Traversable (for)
@@ -15,7 +15,7 @@ import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import Data.Maybe
 import Data.Bits
-import Hexdump
+import Hexdump -- for debugging
 
 -- | This table defines the mapping of character codes to the glyph
 -- index values used in the font. It may contain more than one
@@ -113,10 +113,10 @@ data MapFormat =
   -- | 32 bit single contiguous block (trimmed), for compatibility
   -- only, do not use
   MapFormat10 |
-  
-  MapFormat12 |
-  -- | 32 bit segmented coverage
-  MapFormat13 
+  -- | 32 bit segmented coverage  
+  MapFormat12
+
+
 
 instance Binary CmapTable where
   put (CmapTable cmaps_) =
@@ -194,7 +194,7 @@ instance Binary CMapIntern where
         8 -> getMap8 bs
         10 -> getMap10 bs
         12 -> getMap12 bs
-        i -> fail $ "unkown encoding type " ++ show i
+        i -> fail $ "unsupported map encoding " ++ show i
 
 index16 :: Strict.ByteString -> Word16 -> Either String Word16
 index16 bs i
@@ -210,7 +210,7 @@ index32 :: Strict.ByteString -> Word32 -> Either String Word32
 index32 bs i
   | Strict.length bs < fromIntegral ((i+1)*4) ||
     i < 0 = Left $ "Index " ++ show i ++ " Out of Bounds"
-  | otherwise = Right $ b1 `shift` 24 .&. b2 `shift` 16 .&. b3 `shift` 8 + b4
+  | otherwise = Right $ b1 `shift` 24 .|. b2 `shift` 16 .|. b3 `shift` 8 .|. b4
   where
     b1, b2, b3, b4 :: Word32
     b1 = fromIntegral $ unsafeIndex bs (fromIntegral $ i*4)
@@ -247,10 +247,11 @@ subCodes set start end =
   putCodes start end $ IM.toList $ subIntMap start end set
 
 
-data SubTable2 a = SubTable2 {
-  firstCode :: a,
-  entryCount :: a,
-  rangeOffset :: a,
+data SubTable2 = SubTable2 {
+  highByte :: Word16,
+  firstCode :: Word16,
+  entryCount :: Word16,
+  rangeOffset :: Word16,
   rangeBytes :: Put
   }
 
@@ -281,8 +282,8 @@ putMap2 cmap = do
   putWord16be 2
   putWord16be size
   putWord16be (macLanguage cmap)
-  putCodes 0 255 $ zip highBytes [1::Word16 ..]
-  for_ subTables $ \(SubTable2 fc ec ro _) ->
+  putCodes 0 255 $ zip (map (fromIntegral.highByte) subTableCodes) [1::Word16 ..]
+  for_ subTables $ \(SubTable2 _ fc ec ro _) ->
     do putWord16be fc
        putWord16be ec
        putWord16be 0
@@ -293,25 +294,28 @@ putMap2 cmap = do
       highBytes =
         IS.toList $ fst $
         IS.split 255 (multiByte cmap)
-      subTables = scanl calcSubTable firstTable highBytes
+      subTableCodes =
+        filter ((/= 0) . entryCount) $ 
+        flip map highBytes $ \hb ->
+        let subMap = subIntMap ((fromIntegral hb) `shift` 8)
+                     ((fromIntegral hb) `shift` 8 .|. 0xff) $
+                     glyphMap cmap
+            (fstCode, lstCode)
+              | IM.null subMap = (0, -1)
+              | otherwise = (fst $ IM.findMin subMap,
+                             fst $ IM.findMax subMap)
+            ec = lstCode - fstCode + 1
+            rb = subCodes subMap fstCode lstCode
+        in SubTable2 (fromIntegral hb) (fromIntegral fstCode) (fromIntegral ec) 0 rb
+          where
+      subTables = scanl calcOffset firstTable subTableCodes
       firstTable =
-        SubTable2 0 256 (fromIntegral $ length highBytes * 8 + 2) $
+        SubTable2 0 0 256 (fromIntegral $ length subTableCodes * 8 + 2) $
         subCodes (glyphMap cmap) 0 255
       size :: Word16
-      size = 518 + 8 * (fromIntegral $ length highBytes+1) + 2 * sum (map entryCount subTables)
-      calcSubTable prev hb =
-        SubTable2 (fromIntegral fstCode) (fromIntegral ec)
-        (rangeOffset prev - 8 + 2*entryCount prev) rb
-        where
-          subMap =
-            subIntMap (hb `shift` 8) (hb `shift` 8 + 255) $
-            glyphMap cmap
-          fstCode | IM.null subMap = 0
-                  | otherwise = fst $ IM.findMin subMap
-          lstCode | IM.null subMap = -1
-                  | otherwise = fst $ IM.findMax subMap
-          ec = lstCode - fstCode + 1
-          rb = subCodes subMap fstCode lstCode
+      size = 518 + 8 * (fromIntegral $ length subTables) + 2 * sum (map entryCount subTables)
+      calcOffset prev st = st { rangeOffset = rangeOffset prev - 8 + 2*entryCount prev }
+        
 
 getMap2 :: Strict.ByteString -> Either String CMap
 getMap2 bs = do
@@ -451,16 +455,18 @@ putPacked :: Int -> [Int] -> Put
 putPacked start highBytes
   | start >= 8192 = return ()
   | otherwise = do
-      putWord8 $ sum $ map ((shift 1) . subtract (start `shift` 8)) bytes
+      putWord8 $ foldl' (.|.) 0 $ map ((shift 1) . (.&. 7)) bytes
       putPacked (start+1) rest
         where
-          (bytes, rest) = span (<(start+1) `shift` 8) highBytes
+          (bytes, rest) = span (\b -> b >= (start*8) &&
+                                      b < (start+1)*8)
+                          highBytes
 
-readPacked :: Int -> Strict.ByteString -> [Int]
-readPacked start bs =
-  [1`shift` i .&. b `shift` 8 |
+readPacked :: Strict.ByteString -> [Int]
+readPacked bs =
+  [i .|. b `shift` 3 |
    (a, b) <- zip (Strict.unpack bs) [0..8191],
-   i <- [1..8],
+   i <- [0..7],
    a .&. (1 `shift` i) /= 0
   ]
       
@@ -483,7 +489,7 @@ putMap8 cmap = do
     putWord32be $ fromIntegral end
     putWord32be $ fromIntegral code
   where
-    size = nGroups * 16 + 8196
+    size = nGroups * 12 + 8208
     highBytes = IS.toList $ multiByte cmap
     ranges = findRanges $ IM.toList $ glyphMap cmap
     nGroups = length ranges
@@ -492,12 +498,12 @@ getMap8 :: Strict.ByteString -> Either String CMap
 getMap8 bs = do
   _ <- index16 bs 0
   lang <- index16 bs 1
-  let is = IS.fromAscList $ readPacked 0 bs
+  let is = IS.fromAscList $ readPacked (Strict.drop 4 bs)
   nGroups <- index32 bs 2049
-  gmap <- fmap (IM.fromAscList . concat) $ for [1..nGroups] $ \i -> do
-    start <- index32 bs (i*3 + 2049)
-    end <- index32 bs (i*3 + 2050)
-    glyph <- index32 bs (i*3 + 2051)
+  gmap <- fmap (IM.fromAscList . concat) $ for [0..nGroups-1] $ \i -> do
+    start <- index32 bs (i*3 + 2050)
+    end <- index32 bs (i*3 + 2051)
+    glyph <- index32 bs (i*3 + 2052)
     return [(fromIntegral c, fromIntegral $ glyph+c-start) | c <- [start .. end]]
   Right $ CMap UnicodePlatform 0 lang MapFormat8 is gmap
 
@@ -507,7 +513,7 @@ getMap10 bs = do
   fCode <- index32 bs 1
   eCount <- index32 bs 2
   gmap <- fmap (IM.fromAscList . filter ((/= 0).snd)) $
-          for [1..eCount] $ \i -> do
+          for [0..eCount-1] $ \i -> do
     g <- index16 bs (fromIntegral i+6)
     Right (fromIntegral $ i + fCode, g)
   Right $ CMap UnicodePlatform 0 (fromIntegral lang) MapFormat6 IS.empty gmap
@@ -524,8 +530,8 @@ putMap10 cmap = do
   subCodes (glyphMap cmap) (fromIntegral fCode) (fromIntegral lastCode)
   where
     size, eCount, fCode, lastCode :: Word32
-    size = eCount*2 + 28
-    eCount = lastCode - fCode
+    size = eCount*2 + 20
+    eCount = lastCode - fCode  + 1
     fCode = fromIntegral $ fst $ IM.findMin $ glyphMap cmap
     lastCode = fromIntegral $ fst $ IM.findMax $ glyphMap cmap
 
@@ -557,8 +563,12 @@ getMap12 bs = do
     return [(fromIntegral c, fromIntegral $ glyph+c-start) | c <- [start .. end]]
   Right $ CMap UnicodePlatform 0 lang MapFormat8 IS.empty gmap
 
+
+-- for interactive debugging:
+{-
 createMap l s f = encode $ CMapIntern $ CMap UnicodePlatform 0 1 f (IS.fromList s) (IM.fromList l)
 printMap l s f = putStrLn $ prettyHex $ Lazy.toStrict $ createMap l s f
 getMap l s f = (is, im)
   where
     CMapIntern (CMap _ _ _ _ is im) = decode $ createMap l s f
+-}

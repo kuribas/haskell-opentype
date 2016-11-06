@@ -29,7 +29,12 @@ Library
     vector >= 0.10,
     pretty-hex >= 1.0
   Exposed-Modules:
-    Truetype.Fileformat    
+    Truetype.Fileformat
+  Other-Modules:
+    Truetype.Fileformat.Types
+    Truetype.Fileformat.Glyph
+    Truetype.Fileformat.Cmap
+    Truetype.Fileformat.Head
 
 test-suite test
   type: exitcode-stdio-1.0

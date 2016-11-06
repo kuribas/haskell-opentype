@@ -1,5 +1,5 @@
-module Data.Truetype.Head (HeadTable(..)) where
-import Data.Truetype.Types
+module Truetype.Fileformat.Head (HeadTable(..)) where
+import Truetype.Fileformat.Types
 import Data.Time
 import Data.Binary
 import Data.Binary.Get
@@ -106,7 +106,9 @@ data HeadTable = HeadTable {
   glyphDataFormat :: Int16
   }
 
-instance Binary HeadTable where
+newtype HeadTableIntern = HeadTableIntern HeadTable
+
+instance Binary HeadTableIntern where
   get = do
     major <- getWord16be
     minor <- getWord16be
@@ -132,7 +134,7 @@ instance Binary HeadTable where
     gd <- getInt16be
     let flagAt = byteAt flags
         styleAt = byteAt mcStyle
-    return $ HeadTable 0x00010000 revision
+    return $ HeadTableIntern $ HeadTable 0x00010000 revision
       (flagAt 0) (flagAt 1) (flagAt 2) (flagAt 3)
       (flagAt 4) (flagAt 5) (flagAt 7) (flagAt 8) (flagAt 9)
       (flagAt 10) (flagAt 11) (flagAt 12) (flagAt 13) (flagAt 14) 
@@ -141,7 +143,7 @@ instance Binary HeadTable where
       (styleAt 0) (styleAt 1) (styleAt 2) (styleAt 3) (styleAt 4)
       (styleAt 5) (styleAt 6) lRec fDir iToL gd
 
-  put headTbl = do
+  put (HeadTableIntern headTbl) = do
   putWord16be 1
   putWord16be 0
   putWord32be $ fontRevision headTbl
@@ -159,19 +161,11 @@ instance Binary HeadTable where
   putInt16be $ xMax headTbl
   putInt16be $ yMax headTbl
   putWord16be $ makeFlag $ map ($ headTbl)
-    [boldStyle, italicStyle, underlineStyle, shadowStyle, condensedStyle, extendedStyle]
+    [boldStyle, italicStyle, underlineStyle, outlineStyle, shadowStyle, condensedStyle, extendedStyle]
   putWord16be $ lowerRecPPEM headTbl
   putInt16be $ fontDirectionHint headTbl
   putInt16be $ indexToLocFormat headTbl
   putInt16be $ glyphDataFormat headTbl
-
-byteAt :: Word16 -> Int -> Bool
-byteAt flag i = flag `shift` i /= 0      
-
-makeFlag :: [Bool] -> Word16
-makeFlag l =
-  fromIntegral $ sum $ zipWith (*) (iterate (*2) 1) $
-  map fromEnum l
 
 secDay :: Int64
 secDay = 60 * 60 * 24

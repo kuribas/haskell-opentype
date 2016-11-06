@@ -7,7 +7,7 @@ import Data.List (sort, mapAccumL, foldl')
 import Data.Either (either)
 import Control.Monad
 import Data.Traversable (for)
-import Data.Foldable (for_)
+import Data.Foldable (for_, traverse_)
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString as Strict
 import Data.ByteString.Unsafe
@@ -15,7 +15,7 @@ import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import Data.Maybe
 import Data.Bits
-import Hexdump -- for debugging
+-- import Hexdump -- for debugging
 
 -- | This table defines the mapping of character codes to the glyph
 -- index values used in the font. It may contain more than one
@@ -81,7 +81,7 @@ data CMap = CMap {
   macLanguage :: Word16,
   -- | internal format of the map
   mapFormat :: MapFormat,
-  -- | set contains first byte\/word if part of multibyte\/word
+  -- | set contains high byte\/word if part of multibyte\/word
   -- character.
   multiByte :: IS.IntSet,
   -- | map of character code to glyphID
@@ -96,30 +96,32 @@ instance Eq CMap where
   (CMap pfID encID lang _ _ _) == (CMap pfID2 encID2 lang2 _ _ _) =
     (pfID, encID, lang) == (pfID2, encID2, lang2)
 
-newtype CMapIntern = CMapIntern CMap 
+newtype CMapIntern = CMapIntern CMap
+newtype CmapTableIntern = CmapTableIntern CmapTable
 
 data MapFormat = 
-  -- | legacy 8 bit encoding, contiguous block of bytes
+  -- | 8 bit encoding, contiguous block of bytes.  LEGACY ONLY.
   MapFormat0 |
-  -- | legacy mixed 8/16 bit encoding 
+  -- | mixed 8/16 bit encoding with gaps.  LEGACY ONLY.
   MapFormat2 |
   -- | 16 bit encoding with holes.  This should contain the BMP for a
   -- unicode font.
   MapFormat4 |
   -- | 16 bit single contiguous block (trimmed).
   MapFormat6 |
-  -- | mixed 16/32 bit, for compatibility only, do not use
+  -- | mixed 16/32 bit, for compatibility only, DO NOT USE
   MapFormat8 |
   -- | 32 bit single contiguous block (trimmed), for compatibility
-  -- only, do not use
+  -- only, DO NOT USE
   MapFormat10 |
-  -- | 32 bit segmented coverage  
+  -- | 32 bit segmented coverage.  This should contain Unicode
+  -- encodings with glyphs above 0xFFFF.  It's recommended to save a
+  -- subset to format 4, for backwards compatibility.
   MapFormat12
 
 
-
-instance Binary CmapTable where
-  put (CmapTable cmaps_) =
+instance Binary CmapTableIntern where
+  put (CmapTableIntern (CmapTable cmaps_)) =
     do putWord16be 0
        putWord16be $ fromIntegral $ length cmaps
        for_ (zip offsets cmaps) $
@@ -127,7 +129,7 @@ instance Binary CmapTable where
          do putPf pfID
             putWord16be encID
             putWord32be len
-       mapM_ putLazyByteString cmapsBs 
+       traverse_ putLazyByteString cmapsBs 
          where
            cmaps = sort cmaps_
            offsets :: [Word32]
@@ -147,7 +149,7 @@ instance Binary CmapTable where
     cmaps <- for entries $ \(pfID, encID) -> do
       CMapIntern cm <- get
       return $ cm {platformID = pfID, encodingID = encID}
-    return $ CmapTable cmaps
+    return $ CmapTableIntern (CmapTable cmaps)
 
 putPf :: PlatformID -> Put
 putPf UnicodePlatform = putWord16be 0
@@ -321,8 +323,8 @@ getMap2 :: Strict.ByteString -> Either String CMap
 getMap2 bs = do
   lang <- index16 bs 0
   highBytes <- do
-    l <- mapM (index16 bs) [1..256]
-    Right $ map fst $ filter ((/=0).snd) $ zip [0..255] l
+    l <- traverse (index16 bs) [1..256]
+    Right $ map fst $ filter ((/=0).snd) $ zip [0::Int ..255] l
   l <- for [0::Word16 .. fromIntegral $ length highBytes] $ \i -> do
     fstCode <- index16 bs (fromIntegral $ 257 + i*4)
     cnt <- index16 bs (fromIntegral $ 257 + i*4 + 1)
@@ -385,12 +387,12 @@ putMap4 cmap = do
   putWord16be searchRange
   putWord16be entrySelector
   putWord16be $ 2*segCount - searchRange
-  mapM_ (put.s4endCode) layout
+  traverse_ (put.s4endCode) layout
   putWord16be 0
-  mapM_ (put.s4startCode) layout
-  mapM_ (put.s4idDelta) layout
-  mapM_ (put.s4idRangeOffset) layout
-  mapM_ (mapM_ put.s4glyphIndex) layout
+  traverse_ (put.s4startCode) layout
+  traverse_ (put.s4idDelta) layout
+  traverse_ (put.s4idRangeOffset) layout
+  traverse_ (traverse_ put.s4glyphIndex) layout
     where
       size, segCount, searchRange, entrySelector :: Word16
       entrySelector = iLog2 segCount

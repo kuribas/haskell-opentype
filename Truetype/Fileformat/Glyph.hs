@@ -1,8 +1,10 @@
+{-# LANGUAGE MultiWayIf #-}
 module Truetype.Fileformat.Glyph where
 import Truetype.Fileformat.Types
 import qualified Data.Vector as V
 import Data.Foldable (traverse_, for_)
 import Control.Monad
+import Data.Function (fix)
 import Data.Word
 import Data.Maybe (isJust)
 import Data.Bits
@@ -21,10 +23,10 @@ data GlyfTable = GlyfTable (V.Vector Glyph)
 data Glyph = Glyph {
   advanceWidth :: Word,
   leftSideBearing :: Int,
-  glyphXmin :: Int,
-  glyphYMin :: Int,
-  glyphXmax :: Int,
-  glyphYmax :: Int,
+  glyphXmin :: FWord,
+  glyphYMin :: FWord,
+  glyphXmax :: FWord,
+  glyphYmax :: FWord,
   glyphOutlines :: GlyphOutlines}
 
 data GlyphOutlines =
@@ -79,6 +81,37 @@ data GlyphComponent =
   -- with old apple software.
   scaledComponentOffset :: Bool
 }
+
+newtype GlyphIntern = GlyphIntern Glyph
+
+instance Binary GlyphIntern where
+  put (GlyphIntern (Glyph _ _ xmin ymin xmax ymax outlines)) = do
+    putInt16be xmin
+    putInt16be ymin
+    putInt16be xmax
+    putInt16be ymax
+    case outlines of
+      GlyphContours pts instrs ->
+        putContour pts instrs
+      CompositeGlyph comps -> do
+        traverse_ (putComponent True) (init comps)
+        putComponent False $ last comps
+
+  get = do
+    n <- getInt16be
+    xmin <- getInt16be
+    ymin <- getInt16be
+    xmax <- getInt16be
+    ymax <- getInt16be
+    outlines <-
+      if n >= 0
+      then getContour (fromIntegral n)
+      else fmap CompositeGlyph $ fix $ \nextComponent -> do
+        (c, more) <- getComponent
+        if more then (c:) <$> nextComponent
+          else return [c]
+    return $ GlyphIntern $
+      Glyph 0 0 xmin ymin xmax ymax outlines
 
 isShort :: Int -> Bool
 isShort n = abs n <= 255
@@ -204,8 +237,8 @@ getContour nContours = do
 isShortInt :: Int -> Bool
 isShortInt x = x <= 127 && x >= -128
 
-putComposite :: GlyphComponent -> Bool -> Put
-putComposite c more = do
+putComponent :: Bool -> GlyphComponent -> Put
+putComponent more c = do
   putWord16be flag
   putWord16be $ fromIntegral $ componentID c
   case (byteAt flag 0, byteAt flag 1) of
@@ -221,12 +254,13 @@ putComposite c more = do
     (True, True) -> do
       putInt16be $ fromIntegral $ componentX c
       putInt16be $ fromIntegral $ componentY c
-  putInt16be $ componentXX c
-  when (byteAt flag 6) $ do
-    putInt16be $ componentXY c
-    putInt16be $ componentYX c
-  when (byteAt flag 6 || byteAt flag 7) $
-    putInt16be $ componentYY c
+  when (flag .&. (shift 1 3 + shift 1 6 + shift 1 7) /= 0) $
+    putWord16be $ componentXX c
+  when (byteAt flag 7) $ do
+    putWord16be $ componentXY c
+    putWord16be $ componentYX c
+  when (flag .&. (shift 1 6 + shift 1 7) /= 0) $
+    putWord16be $ componentYY c
   for_ (componentInstructions c) $ \instr -> do
     putWord16be $ fromIntegral $ V.length instr
     traverse_ putWord8 instr
@@ -239,6 +273,7 @@ putComposite c more = do
                (not $ isShortInt $ componentY c),
           not $ matchPoints c,
           roundXYtoGrid c,
+          componentXX c /= 0x4000 &&
           componentXX c == componentYY c &&
           componentXY c == 0 && componentYX c == 0,
           False,
@@ -252,3 +287,51 @@ putComposite c more = do
           overlapCompound c,
           scaledComponentOffset c,
           not $ scaledComponentOffset c]
+
+getComponent :: Get (GlyphComponent, Bool)
+getComponent = do
+  flag <- getWord16be
+  gID <- getWord16be
+  (cX, cY) <-
+    if | byteAt flag 0 && byteAt flag 1 ->
+           liftM2 (,)
+           (fromIntegral <$> getInt16be)
+           (fromIntegral <$> getInt16be)
+       | byteAt flag 0 ->
+           liftM2 (,)
+           (fromIntegral <$> getWord16be)
+           (fromIntegral <$> getWord16be)
+       | byteAt flag 1 ->
+           liftM2 (,)
+           (fromIntegral <$> getInt8)
+           (fromIntegral <$> getInt8)
+       | otherwise ->
+           liftM2 (,)
+           (fromIntegral <$> getWord8)
+           (fromIntegral <$> getWord8)
+  (tXX, tXY, tYX, tYY) <-
+    if | byteAt flag 3 -> do
+           x <- getWord16be
+           return (x, 0, 0, x)
+       | byteAt flag 6 -> do
+           x <- getWord16be
+           y <- getWord16be
+           return (x, 0, 0, y)
+       | byteAt flag 7 -> do
+           xx <- getWord16be
+           xy <- getWord16be
+           yx <- getWord16be
+           yy <- getWord16be
+           return (xx, xy, yx, yy)
+       | otherwise -> return (1, 0, 0, 1)
+  instructions <- 
+    if byteAt flag 8
+    then Just <$> do
+      l <- fromIntegral <$> getWord8
+      V.replicateM l getWord8
+    else return Nothing
+  return (
+    GlyphComponent (fromIntegral gID) instructions tXX tXY tYX tYY
+      cX cY (not $ byteAt flag 1) (byteAt flag 2)
+      (byteAt flag 9) (byteAt flag 10) (byteAt flag 11),
+    byteAt flag 5) -- more components

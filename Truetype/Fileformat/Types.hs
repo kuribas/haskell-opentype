@@ -16,7 +16,7 @@ type FWord = Int16
 -- distance in em space.
 type UFWord = Word16
 -- | fixed number with the low 14 bits representing fraction.
-type F2Dot14 = Int16
+type F2Dot14 = Word16
 -- | the glyph index in the glyph table
 type GlyphID = Word16
 

@@ -130,22 +130,19 @@ putCompressFlags (a:r) =
 contourFlags :: [CurvePoint] -> [Word8]
 contourFlags [] = []
 contourFlags cps@(CurvePoint x y oc: cps2) =
-  if null cps
-  then [firstFlag]
-  else firstFlag : zipWith pairFlags cps cps2
-       where
-         firstFlag = fromIntegral $
-           makeFlag [oc, isShort x, isShort y, False, 
-                     isShort x && x > 0,
-                     isShort y && y > 0]
-
+  firstFlag : zipWith pairFlags cps cps2
+  where
+    firstFlag = fromIntegral $
+                makeFlag [oc, isShort x, isShort y, False, 
+                          isShort x && x >= 0,
+                          isShort y && y >= 0]
 
 pairFlags :: CurvePoint -> CurvePoint -> Word8  
 pairFlags (CurvePoint x1 y1 _) (CurvePoint x2 y2 oc) =
   fromIntegral $ 
   makeFlag [oc, sx && not eqX, sy && not eqY, False,
-            if sx then x2 > 0 else eqX,
-            if sy then y2 > 0 else eqY]
+            if sx then x2 >= 0 else eqX,
+            if sy then y2 >= 0 else eqY]
   where
     sx = isShort x2
     sy = isShort y2
@@ -166,8 +163,8 @@ putCoordY (CurvePoint _ y _) flag
 
 putContour :: [[CurvePoint]] -> V.Vector Word8 -> Put    
 putContour points instr = do
-  traverse_ (putWord8.fromIntegral) endPts
-  putWord8 $ fromIntegral $ V.length instr
+  traverse_ (putWord16be.fromIntegral) endPts
+  putWord16be $ fromIntegral $ V.length instr
   traverse_ putWord8 instr
   putCompressFlags flags
   zipWithM_ putCoordX allPts flags
@@ -193,7 +190,7 @@ getXcoords (f:r) prev
   | byteAt f 1 = do
       x <- getWord8
       let x' | byteAt f 4 = fromIntegral x
-            | otherwise = - fromIntegral x
+             | otherwise = - fromIntegral x
       (x':) <$> getXcoords r x'
   | byteAt f 4 = (prev:) <$> getXcoords r prev
   | otherwise = do
@@ -205,9 +202,9 @@ getYcoords (f:r) prev
   | byteAt f 2 = do
       y <- getWord8
       let y' | byteAt f 5 = fromIntegral y
-            | otherwise = - fromIntegral y
+             | otherwise = - fromIntegral y
       (y':) <$> getYcoords r y'
-  | byteAt f 5 = (prev:) <$> getXcoords r prev
+  | byteAt f 5 = (prev:) <$> getYcoords r prev
   | otherwise = do
       y <- fromIntegral <$> getWord16be
       (y:) <$> getYcoords r y
@@ -222,6 +219,7 @@ reGroup l (n:ns) = c : reGroup r ns
     (c, r) = splitAt n l
   
 getContour :: Int -> Get GlyphOutlines
+getContour 0 =  return $ GlyphContours [] V.empty
 getContour nContours = do
   lastPts <- replicateM nContours (fromIntegral <$> getWord16be)
   iLen <- fromIntegral <$> getWord16be
@@ -327,7 +325,7 @@ getComponent = do
   instructions <- 
     if byteAt flag 8
     then Just <$> do
-      l <- fromIntegral <$> getWord8
+      l <- fromIntegral <$> getWord16be
       V.replicateM l getWord8
     else return Nothing
   return (

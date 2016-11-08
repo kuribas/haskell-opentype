@@ -6,8 +6,6 @@ import Data.Binary.Get
 import Data.Binary.Put
 import Control.Monad
 import Data.Int
-import Data.Bits
-
 
 -- | This table contains global information about the font. it
 -- records such facts as the font version number, the creation and
@@ -17,7 +15,7 @@ import Data.Bits
 -- most likely to be written and other information about the placement
 -- of glyphs in the em square.
 data HeadTable = HeadTable {
-  -- | 0x00010000 for version 1.0.
+  -- | 0x00010000 for version 1.0.  Will be auto written .
   version :: Fixed,
   -- | set by font manufacturer.
   fontRevision :: Fixed,
@@ -79,13 +77,13 @@ data HeadTable = HeadTable {
   -- bit 15 zero
   unitsPerEm :: Word16,
   created :: UTCTime,  modified :: UTCTime,
-  -- | For all glyph bounding boxes
+  -- | Will be auto written .
   xMin :: FWord,
-  -- | For all glyph bounding boxes
+  -- | Will be auto written .
   yMin :: FWord,
-  -- | For all glyph bounding boxes
+  -- | Will be auto written .
   xMax :: FWord,
-  -- | For all glyph bounding boxes
+  -- | Will be auto written .
   yMax :: FWord,
   -- macStyle
   
@@ -100,9 +98,9 @@ data HeadTable = HeadTable {
   lowerRecPPEM :: Word16,
   -- | deprecated, will be set to 2
   fontDirectionHint :: Int16,
-  -- | 0 for short offsets, 1 for long.  Will be automatically written.
-  indexToLocFormat :: Int16,
-  -- | 0 for current format
+  -- | 0 for short offsets, 1 for long.  Will be auto written.
+  longLocIndices :: Bool,
+  -- | 0 for current format.  Will be auto written .
   glyphDataFormat :: Int16
   }
 
@@ -141,7 +139,7 @@ instance Binary HeadTableIntern where
       uPe (getTime created_) (getTime modified_)
       xMin_ yMin_ xMax_ yMax_
       (styleAt 0) (styleAt 1) (styleAt 2) (styleAt 3) (styleAt 4)
-      (styleAt 5) (styleAt 6) lRec fDir iToL gd
+      (styleAt 5) (styleAt 6) lRec fDir (iToL /= 0) gd
 
   put (HeadTableIntern headTbl) = do
   putWord16be 1
@@ -163,9 +161,9 @@ instance Binary HeadTableIntern where
   putWord16be $ makeFlag $ map ($ headTbl)
     [boldStyle, italicStyle, underlineStyle, outlineStyle, shadowStyle, condensedStyle, extendedStyle]
   putWord16be $ lowerRecPPEM headTbl
-  putInt16be $ fontDirectionHint headTbl
-  putInt16be $ indexToLocFormat headTbl
-  putInt16be $ glyphDataFormat headTbl
+  putInt16be $ 2 -- fontDirectionHint headTbl
+  putInt16be $ fromIntegral $ fromEnum $ longLocIndices headTbl
+  putInt16be $ 0 -- glyphDataFormat headTbl
 
 secDay :: Int64
 secDay = 60 * 60 * 24

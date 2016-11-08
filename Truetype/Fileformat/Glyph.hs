@@ -1,16 +1,22 @@
-{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE MultiWayIf, TupleSections #-}
 module Truetype.Fileformat.Glyph where
 import Truetype.Fileformat.Types
+import Truetype.Fileformat.Maxp
+import Truetype.Fileformat.Hhea
+import Truetype.Fileformat.Head
 import qualified Data.Vector as V
 import Data.Foldable (traverse_, for_)
 import Control.Monad
 import Data.Function (fix)
+import qualified Data.ByteString.Lazy as Lazy
 import Data.Word
+import Data.Int
 import Data.Maybe (isJust)
 import Data.Bits
 import Data.Binary
 import Data.Binary.Put
 import Data.Binary.Get
+
 
 -- | This table contains the data that defines the appearance of
 -- the glyphs in the font. This includes specification of the points
@@ -21,24 +27,26 @@ import Data.Binary.Get
 data GlyfTable = GlyfTable (V.Vector Glyph)
 
 data Glyph = Glyph {
-  advanceWidth :: Word,
-  leftSideBearing :: Int,
+  advanceWidth :: Word16,
+  leftSideBearing :: Int16,
   glyphXmin :: FWord,
-  glyphYMin :: FWord,
+  glyphYmin :: FWord,
   glyphXmax :: FWord,
   glyphYmax :: FWord,
   glyphOutlines :: GlyphOutlines}
+  deriving Show
 
 data GlyphOutlines =
   GlyphContours [[CurvePoint]] Instructions |
   CompositeGlyph [GlyphComponent]
-
+  deriving Show
 
 -- | @CurvePoint x y onCurve@: Points used to describe the outline
 -- using lines and quadratic beziers.  Coordinates are relative to the
 -- previous point.  If two off-curve points follow each other, an
 -- on-curve point is added halfway between.
 data CurvePoint = CurvePoint Int Int Bool
+  deriving Show
 
 -- | TODO: make a proper datatype for instructions.
 type Instructions = V.Vector Word8
@@ -48,13 +56,13 @@ data GlyphComponent =
   componentID :: Int,
   componentInstructions :: Maybe Instructions,
   -- | transformation matrix for scaling the glyph
-  componentXX :: F2Dot14,
+  componentXX :: ShortFrac,
   -- | transformation matrix for scaling the glyph
-  componentXY :: F2Dot14,
+  componentXY :: ShortFrac,
   -- | transformation matrix for scaling the glyph
-  componentYX :: F2Dot14,
+  componentYX :: ShortFrac,
   -- | transformation matrix for scaling the glyph
-  componentYY :: F2Dot14,
+  componentYY :: ShortFrac,
   -- | if matchPoints is `True`, index of matching point in compound
   -- being constructed, otherwise x shift.  This offset is unscaled
   -- (microsoft bit set) in the rasterizer.
@@ -80,38 +88,100 @@ data GlyphComponent =
   -- set to False (opentype default), unless the font is meant to work
   -- with old apple software.
   scaledComponentOffset :: Bool
-}
+  }
+  deriving Show
 
-newtype GlyphIntern = GlyphIntern Glyph
+readHmetrics :: Int -> Int -> Get [(Word16, Int16)]
+readHmetrics 1 m = do
+  aw <- getWord16be
+  lsb <- getInt16be
+  ((aw, lsb):) <$> replicateM (m-1) ((aw,) <$> getInt16be)
 
-instance Binary GlyphIntern where
-  put (GlyphIntern (Glyph _ _ xmin ymin xmax ymax outlines)) = do
-    putInt16be xmin
-    putInt16be ymin
-    putInt16be xmax
-    putInt16be ymax
-    case outlines of
-      GlyphContours pts instrs ->
-        putContour pts instrs
-      CompositeGlyph comps -> do
-        traverse_ (putComponent True) (init comps)
-        putComponent False $ last comps
+readHmetrics 0 _ = fail "no horizontal metrics found"
+readHmetrics n m = do
+  aw <- getWord16be
+  lsb <- getInt16be
+  ((aw, lsb):) <$> readHmetrics (n-1) (m-1)
 
-  get = do
-    n <- getInt16be
-    xmin <- getInt16be
-    ymin <- getInt16be
-    xmax <- getInt16be
-    ymax <- getInt16be
-    outlines <-
-      if n >= 0
-      then getContour (fromIntegral n)
-      else fmap CompositeGlyph $ fix $ \nextComponent -> do
-        (c, more) <- getComponent
-        if more then (c:) <$> nextComponent
-          else return [c]
-    return $ GlyphIntern $
-      Glyph 0 0 xmin ymin xmax ymax outlines
+readGlyphSizes :: Bool -> Int -> Get [Int]
+readGlyphSizes long n = do
+  offsets <- replicateM (n+1) $ 
+             if long then fromIntegral <$> getWord32be
+             else (*2).fromIntegral <$> getWord16be
+  return $ zipWith (-) (tail offsets) offsets
+  
+readGlyphTable :: [Int] -> [(Word16, Int16)] -> Lazy.ByteString
+               -> Either (Lazy.ByteString, ByteOffset, String) (V.Vector Glyph)
+readGlyphTable glyphSizes hmetrics glyfBs = do
+  glyphs <- getWithBounds glyfBs glyphSizes getGlyph
+  return $ V.fromList $ zipWith
+    (\g (aw, lsb) -> g {advanceWidth = aw, leftSideBearing = lsb})
+    glyphs hmetrics
+
+-- return bytestring lengths
+writeGlyphs :: [Glyph] -> PutM [Int]
+writeGlyphs = traverse writeGlyph
+
+writeGlyph :: Glyph -> PutM Int
+writeGlyph g = do
+  putLazyByteString bs
+  replicateM_ pad (putWord8 0)
+  return $ fromIntegral (len+pad)
+    where bs = runPut $ putGlyph g
+          len = fromIntegral $ Lazy.length bs
+          pad = (- fromIntegral len) .&. 3
+  
+-- return long or short format  
+writeLoca :: [Int] -> (Bool, Put)
+writeLoca i
+  | last offsets > 0xffff = (True, traverse_ (putWord32be . fromIntegral) offsets)
+  | otherwise = (False, traverse_ (putWord16be . (`quot` 2) . fromIntegral) offsets)
+  where
+    offsets = scanl (+) 0 i
+    
+writeHmtx :: [Glyph] -> (Int, Put)
+writeHmtx [] = (0, return ())
+writeHmtx gs =
+  (length dbl,
+   do traverse_ (\g -> do putWord16be (advanceWidth g)
+                          putInt16be (leftSideBearing g)) $
+        reverse dbl
+      traverse_ (putInt16be.leftSideBearing) $ reverse (lastG:sngl)
+  ) where
+  (sngl, dbl) = span ((== advanceWidth lastG).advanceWidth) $ reverse prev
+  (lastG:prev) = reverse gs
+  
+putGlyph :: Glyph -> Put
+putGlyph (Glyph _ _ xmin ymin xmax ymax outlines) = do
+  putInt16be $ case outlines of
+    GlyphContours pts _ -> fromIntegral $ length pts
+    _ -> -1
+  putInt16be xmin
+  putInt16be ymin
+  putInt16be xmax
+  putInt16be ymax
+  case outlines of
+    GlyphContours pts instrs ->
+      putContour pts instrs
+    CompositeGlyph comps -> do
+      traverse_ (putComponent True) (init comps)
+      putComponent False $ last comps
+
+getGlyph :: Get Glyph
+getGlyph = do
+  n <- getInt16be
+  xmin <- getInt16be
+  ymin <- getInt16be
+  xmax <- getInt16be
+  ymax <- getInt16be
+  outlines <-
+    if n >= 0
+    then getContour (fromIntegral n)
+    else fmap CompositeGlyph $ fix $ \nextComponent -> do
+      (c, more) <- getComponent
+      if more then (c:) <$> nextComponent
+        else return [c]
+  return $ Glyph 0 0 xmin ymin xmax ymax outlines
 
 isShort :: Int -> Bool
 isShort n = abs n <= 255
@@ -122,7 +192,7 @@ putCompressFlags (a:r) =
   do if null as
        then putWord8 a
        else do putWord8 (a .|. 8)
-               putWord8 $ fromIntegral $ length as
+               putWord8 $ fromIntegral $ length as + 1
      putCompressFlags r2
        where
          (as, r2) = span (== a) r
@@ -141,8 +211,8 @@ pairFlags :: CurvePoint -> CurvePoint -> Word8
 pairFlags (CurvePoint x1 y1 _) (CurvePoint x2 y2 oc) =
   fromIntegral $ 
   makeFlag [oc, sx && not eqX, sy && not eqY, False,
-            if sx then x2 >= 0 else eqX,
-            if sy then y2 >= 0 else eqY]
+            eqX || (sx && x2 >= 0),
+            eqY || (sy && y2 >= 0)]
   where
     sx = isShort x2
     sy = isShort y2
@@ -235,6 +305,91 @@ getContour nContours = do
 isShortInt :: Int -> Bool
 isShortInt x = x <= 127 && x >= -128
 
+glyphExtent, glyphRsb :: Glyph -> Int16
+glyphRsb g =
+  fromIntegral ((fromIntegral (advanceWidth g)  - fromIntegral (leftSideBearing g - (glyphXmax g - glyphXmin g))) :: Int)
+glyphExtent glyf = leftSideBearing glyf + (glyphXmax glyf - glyphXmin glyf)
+
+updateHhea :: HheaTable -> V.Vector Glyph -> HheaTable
+updateHhea = V.foldl updateHhea1
+
+updateMinMax :: (FWord, FWord, FWord, FWord)
+             -> Glyph -> (FWord, FWord, FWord, FWord)
+updateMinMax (xmin, ymin, xmax, ymax) g =
+  (min xmin (glyphXmin g),
+   min ymin (glyphYmin g),
+   max xmax (glyphXmax g),
+   max ymax (glyphYmax g))
+
+updateHead :: HeadTable -> V.Vector Glyph -> HeadTable
+updateHead headTbl vec =
+  headTbl {xMin = xmin, yMin = ymin,
+           xMax = xmax, yMax = ymax}
+  where (xmin, ymin, xmax, ymax) =
+          V.foldl updateMinMax (maxBound, maxBound, minBound, minBound) vec
+
+updateHhea1 :: HheaTable -> Glyph -> HheaTable
+updateHhea1 hhea g =
+  hhea {advanceWidthMax     = max (advanceWidthMax hhea)
+                              (advanceWidth g),
+        minLeftSideBearing  = min (minLeftSideBearing hhea)
+                              (leftSideBearing g),
+        minRightSideBearing = min (minRightSideBearing hhea)
+                              (glyphRsb g),
+        xMaxExtent          = max (xMaxExtent hhea)
+                              (glyphExtent g)}
+updateMaxp :: V.Vector Glyph -> MaxpTable -> V.Vector Glyph -> MaxpTable
+updateMaxp vec = V.foldl (updateMaxp1 vec)
+
+updateMaxp1 :: V.Vector Glyph -> MaxpTable -> Glyph -> MaxpTable
+updateMaxp1 vec maxp glyf =
+  maxp {numGlyphs            = numGlyphs maxp + 1,
+        maxPoints            = max (maxPoints maxp) $
+                               glyfPoints vec glyf,
+        maxContours          = max (maxContours maxp) $
+                               glyfContours vec glyf,
+        maxComponentPoints   = max (maxComponentPoints maxp) $
+                               componentPoints vec glyf,
+        maxComponentContours = max (maxComponentContours maxp) $
+                               componentContours vec glyf,
+        maxComponentElements = max (maxComponentElements maxp) $
+                               componentRefs vec glyf,
+        maxComponentDepth    = max (maxComponentDepth maxp) $
+                               componentDepth vec glyf}
+
+overComponents :: ([[CurvePoint]] -> Word16) -> ([Word16] ->  Word16)
+               -> Int -> V.Vector Glyph -> Glyph -> Word16
+overComponents f h maxD v g
+  | maxD <= 0 = 0
+  | otherwise =
+    case glyphOutlines g of
+      GlyphContours p _ -> f p
+      CompositeGlyph comps ->
+        h $ map overSub comps
+        where overSub comp = case v V.!? componentID comp of
+                Nothing -> 0
+                Just g2 -> overComponents f h (maxD-1) v g2
+  
+glyfPoints, glyfContours, componentRefs, componentDepth, componentPoints, componentContours :: V.Vector Glyph -> Glyph -> Word16
+
+glyfPoints  =
+  overComponents (sum . map (fromIntegral.length)) (const 0) 2
+
+glyfContours =
+  overComponents (fromIntegral.length) (const 0) 2
+
+componentRefs =
+  overComponents (const 0) (fromIntegral.length) 2
+
+componentPoints =
+  overComponents (sum . map (fromIntegral . length)) sum 10
+
+componentDepth =
+  overComponents (const 0) ((+1).maximum) 10
+
+componentContours =
+  overComponents (fromIntegral.length) sum 10
+
 putComponent :: Bool -> GlyphComponent -> Put
 putComponent more c = do
   putWord16be flag
@@ -253,33 +408,32 @@ putComponent more c = do
       putInt16be $ fromIntegral $ componentX c
       putInt16be $ fromIntegral $ componentY c
   when (flag .&. (shift 1 3 + shift 1 6 + shift 1 7) /= 0) $
-    putWord16be $ componentXX c
+    putShortFrac $ componentXX c
   when (byteAt flag 7) $ do
-    putWord16be $ componentXY c
-    putWord16be $ componentYX c
+    putShortFrac $ componentXY c
+    putShortFrac $ componentYX c
   when (flag .&. (shift 1 6 + shift 1 7) /= 0) $
-    putWord16be $ componentYY c
+    putShortFrac $ componentYY c
   for_ (componentInstructions c) $ \instr -> do
     putWord16be $ fromIntegral $ V.length instr
     traverse_ putWord8 instr
       where
         flag = makeFlag [
           if matchPoints c
-          then componentX c <= 0xff &&
-               componentY c <= 0xff
-          else (not $ isShortInt $ componentX c) &&
+          then componentX c > 0xff ||
+               componentY c > 0xff
+          else (not $ isShortInt $ componentX c) ||
                (not $ isShortInt $ componentY c),
           not $ matchPoints c,
           roundXYtoGrid c,
-          componentXX c /= 0x4000 &&
+          componentXX c /= 1 &&
           componentXX c == componentYY c &&
           componentXY c == 0 && componentYX c == 0,
           False,
           more,
           componentXX c /= componentYY c &&
           componentXY c == 0 && componentYX c == 0,
-          componentXX c /= componentYY c &&
-          (componentXY c /= 0 || componentYX c /= 0),
+          componentXY c /= 0 || componentYX c /= 0,
           isJust (componentInstructions c),
           useMyMetrics c,
           overlapCompound c,
@@ -309,17 +463,17 @@ getComponent = do
            (fromIntegral <$> getWord8)
   (tXX, tXY, tYX, tYY) <-
     if | byteAt flag 3 -> do
-           x <- getWord16be
+           x <- ShortFrac <$> getInt16be
            return (x, 0, 0, x)
        | byteAt flag 6 -> do
-           x <- getWord16be
-           y <- getWord16be
+           x <- ShortFrac <$> getInt16be
+           y <- ShortFrac <$> getInt16be
            return (x, 0, 0, y)
        | byteAt flag 7 -> do
-           xx <- getWord16be
-           xy <- getWord16be
-           yx <- getWord16be
-           yy <- getWord16be
+           xx <- ShortFrac <$> getInt16be
+           xy <- ShortFrac <$> getInt16be
+           yx <- ShortFrac <$> getInt16be
+           yy <- ShortFrac <$> getInt16be
            return (xx, xy, yx, yy)
        | otherwise -> return (1, 0, 0, 1)
   instructions <- 
@@ -333,3 +487,4 @@ getComponent = do
       cX cY (not $ byteAt flag 1) (byteAt flag 2)
       (byteAt flag 9) (byteAt flag 10) (byteAt flag 11),
     byteAt flag 5) -- more components
+

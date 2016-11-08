@@ -96,9 +96,6 @@ instance Eq CMap where
   (CMap pfID encID lang _ _ _) == (CMap pfID2 encID2 lang2 _ _ _) =
     (pfID, encID, lang) == (pfID2, encID2, lang2)
 
-newtype CMapIntern = CMapIntern CMap
-newtype CmapTableIntern = CmapTableIntern CmapTable
-
 data MapFormat = 
   -- | 8 bit encoding, contiguous block of bytes.  LEGACY ONLY.
   MapFormat0 |
@@ -119,37 +116,37 @@ data MapFormat =
   -- subset to format 4, for backwards compatibility.
   MapFormat12
 
-
-instance Binary CmapTableIntern where
-  put (CmapTableIntern (CmapTable cmaps_)) =
-    do putWord16be 0
-       putWord16be $ fromIntegral $ length cmaps
-       for_ (zip offsets cmaps) $
-         \(len, CMap pfID encID _ _ _ _) ->
+putCmapTable :: CmapTable -> Put
+putCmapTable (CmapTable cmaps_) =
+  do putWord16be 0
+     putWord16be $ fromIntegral $ length cmaps
+     for_ (zip offsets cmaps) $
+       \(len, CMap pfID encID _ _ _ _) ->
          do putPf pfID
             putWord16be encID
             putWord32be len
-       traverse_ putLazyByteString cmapsBs 
-         where
-           cmaps = sort cmaps_
-           offsets :: [Word32]
-           offsets =
-             scanl (+) (fromIntegral $ 8 * length cmaps) $
-             map (fromIntegral . Lazy.length) cmapsBs
-           cmapsBs = map (encode . CMapIntern) cmaps
-    
-  get = do
-    _ <- getWord16be
-    n <- liftM fromIntegral getWord16be
-    entries <- replicateM n $ do
-      pfID <- getPf :: Get PlatformID
-      encID <- getWord16be
-      _offset <- getWord32be
-      return (pfID, encID)
-    cmaps <- for entries $ \(pfID, encID) -> do
-      CMapIntern cm <- get
-      return $ cm {platformID = pfID, encodingID = encID}
-    return $ CmapTableIntern (CmapTable cmaps)
+            traverse_ putLazyByteString cmapsBs 
+              where
+                cmaps = sort cmaps_
+                offsets :: [Word32]
+                offsets =
+                  scanl (+) (fromIntegral $ 8 * length cmaps) $
+                  map (fromIntegral . Lazy.length) cmapsBs
+                cmapsBs = map (runPut.putCmap) cmaps
+
+getCmapTable :: Get CmapTable     
+getCmapTable = do
+  _ <- getWord16be
+  n <- liftM fromIntegral getWord16be
+  entries <- replicateM n $ do
+    pfID <- getPf :: Get PlatformID
+    encID <- getWord16be
+    _offset <- getWord32be
+    return (pfID, encID)
+  cmaps <- for entries $ \(pfID, encID) -> do
+    cm <- getCmap
+    return $ cm {platformID = pfID, encodingID = encID}
+  return $ CmapTable cmaps
 
 putPf :: PlatformID -> Put
 putPf UnicodePlatform = putWord16be 0
@@ -165,38 +162,39 @@ getPf = do
     3 -> return MicrosoftPlatform
     i -> fail $ "unknown platformID " ++ show i 
 
-instance Binary CMapIntern where
-  put (CMapIntern cmap) = case mapFormat cmap of
-    MapFormat0 -> putMap0 cmap
-    MapFormat2 -> putMap2 cmap
+putCmap :: CMap -> Put
+putCmap cmap = case mapFormat cmap of
+  MapFormat0 -> putMap0 cmap
+  MapFormat2 -> putMap2 cmap
   -- 16 bit encoding with holes
-    MapFormat4 -> putMap4 cmap
+  MapFormat4 -> putMap4 cmap
   -- trimmed 16 bit mapping.
-    MapFormat6 -> putMap6 cmap
+  MapFormat6 -> putMap6 cmap
   -- mixed 16/32 bit encoding (DEPRECATED)
-    MapFormat8 -> putMap8 cmap
-    MapFormat10 -> putMap10 cmap
+  MapFormat8 -> putMap8 cmap
+  MapFormat10 -> putMap10 cmap
   -- 32 bit segmented coverage
-    MapFormat12 -> putMap12 cmap
+  MapFormat12 -> putMap12 cmap
 
-  get = do
-    c <- getWord16be
-    bs <- if (c >= 8 && c < 14)
-          then do _ <- getWord16be
-                  sz <- fromIntegral <$> getWord32be
-                  getByteString (sz - 8)
-          else do sz <- fromIntegral <$> getWord16be
-                  getByteString (sz - 4)
-    either fail (return . CMapIntern) $
-      case c of 
-        0 -> getMap0 bs
-        2 -> getMap2 bs
-        4 -> getMap4 bs
-        6 -> getMap6 bs
-        8 -> getMap8 bs
-        10 -> getMap10 bs
-        12 -> getMap12 bs
-        i -> fail $ "unsupported map encoding " ++ show i
+getCmap :: Get CMap
+getCmap = do
+  c <- getWord16be
+  bs <- if (c >= 8 && c < 14)
+        then do _ <- getWord16be
+                sz <- fromIntegral <$> getWord32be
+                getByteString (sz - 8)
+        else do sz <- fromIntegral <$> getWord16be
+                getByteString (sz - 4)
+  either fail return $
+    case c of 
+      0 -> getMap0 bs
+      2 -> getMap2 bs
+      4 -> getMap4 bs
+      6 -> getMap6 bs
+      8 -> getMap8 bs
+      10 -> getMap10 bs
+      12 -> getMap12 bs
+      i -> fail $ "unsupported map encoding " ++ show i
 
 index16 :: Strict.ByteString -> Word16 -> Either String Word16
 index16 bs i
@@ -318,7 +316,6 @@ putMap2 cmap = do
       size = 518 + 8 * (fromIntegral $ length subTables) + 2 * sum (map entryCount subTables)
       calcOffset prev st = st { rangeOffset = rangeOffset prev - 8 + 2*entryCount prev }
         
-
 getMap2 :: Strict.ByteString -> Either String CMap
 getMap2 bs = do
   lang <- index16 bs 0
@@ -565,12 +562,3 @@ getMap12 bs = do
     return [(fromIntegral c, fromIntegral $ glyph+c-start) | c <- [start .. end]]
   Right $ CMap UnicodePlatform 0 lang MapFormat8 IS.empty gmap
 
-
--- for interactive debugging:
-{-
-createMap l s f = encode $ CMapIntern $ CMap UnicodePlatform 0 1 f (IS.fromList s) (IM.fromList l)
-printMap l s f = putStrLn $ prettyHex $ Lazy.toStrict $ createMap l s f
-getMap l s f = (is, im)
-  where
-    CMapIntern (CMap _ _ _ _ is im) = decode $ createMap l s f
--}

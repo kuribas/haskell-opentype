@@ -45,7 +45,7 @@ data GlyphOutlines =
 -- using lines and quadratic beziers.  Coordinates are relative to the
 -- previous point.  If two off-curve points follow each other, an
 -- on-curve point is added halfway between.
-data CurvePoint = CurvePoint Int Int Bool
+data CurvePoint = CurvePoint FWord FWord Bool
   deriving Show
 
 -- | TODO: make a proper datatype for instructions.
@@ -63,18 +63,19 @@ data GlyphComponent =
   componentYX :: ShortFrac,
   -- | transformation matrix for scaling the glyph
   componentYY :: ShortFrac,
-  -- | if matchPoints is `True`, index of matching point in compound
-  -- being constructed, otherwise x shift.  This offset is unscaled
-  -- (microsoft bit set) in the rasterizer.
+  -- | if `matchPoints` is `True`, index of matching point in compound
+  -- being constructed, otherwise x shift.  If `scaledComponentOffset`
+  -- is `False`, this offset is unscaled (microsoft and opentype
+  -- default) in the rasterizer.
   componentX :: Int,
-  -- | if matchPoints is `True`, index of matching point in compound,
-  -- otherwise y shift.  If scaledComponentOffset is False, this
+  -- | if `matchPoints` is `True`, index of matching point in compound,
+  -- otherwise y shift.  If `scaledComponentOffset` is `False`, this
   -- offset is unscaled (microsoft and opentype default) in the
   -- rasterizer.
   componentY :: Int,
     -- | see previous
   matchPoints :: Bool,
-  -- | For the xy values if the preceding is false.
+  -- | For the xy values if `matchPoints` is `False`.
   roundXYtoGrid :: Bool,
   -- | Use metrics from this component for the compound glyph.
   useMyMetrics :: Bool, 
@@ -85,7 +86,7 @@ data GlyphComponent =
   -- specification for details regarding behavior in Apple platforms.)
   overlapCompound :: Bool,
   -- | The component offset is scaled by the rasterizer (apple).  Should be
-  -- set to False (opentype default), unless the font is meant to work
+  -- set to `False` (opentype default), unless the font is meant to work
   -- with old apple software.
   scaledComponentOffset :: Bool
   }
@@ -119,7 +120,7 @@ readGlyphTable glyphSizes hmetrics glyfBs = do
     glyphs hmetrics
 
 -- return bytestring lengths
-writeGlyphs :: [Glyph] -> PutM [Int]
+writeGlyphs :: V.Vector Glyph -> PutM (V.Vector Int)
 writeGlyphs = traverse writeGlyph
 
 writeGlyph :: Glyph -> PutM Int
@@ -132,24 +133,39 @@ writeGlyph g = do
           pad = (- fromIntegral len) .&. 3
   
 -- return long or short format  
-writeLoca :: [Int] -> (Bool, Put)
+writeLoca :: V.Vector Int -> (Bool, PutM Int)
 writeLoca i
-  | last offsets > 0xffff = (True, traverse_ (putWord32be . fromIntegral) offsets)
-  | otherwise = (False, traverse_ (putWord16be . (`quot` 2) . fromIntegral) offsets)
+  | V.last offsets > 0xffff =
+    (True,
+     do traverse_ (putWord32be . fromIntegral) offsets
+        return $ V.length offsets * 4)
+  | otherwise =
+    (False,
+     do traverse_ (putWord16be . (`quot` 2) . fromIntegral) offsets
+        return $ V.length offsets * 2)
   where
-    offsets = scanl (+) 0 i
+    offsets = V.scanl (+) 0 i
     
-writeHmtx :: [Glyph] -> (Int, Put)
-writeHmtx [] = (0, return ())
-writeHmtx gs =
-  (length dbl,
-   do traverse_ (\g -> do putWord16be (advanceWidth g)
-                          putInt16be (leftSideBearing g)) $
-        reverse dbl
-      traverse_ (putInt16be.leftSideBearing) $ reverse (lastG:sngl)
-  ) where
-  (sngl, dbl) = span ((== advanceWidth lastG).advanceWidth) $ reverse prev
-  (lastG:prev) = reverse gs
+writeHmtx :: V.Vector Glyph -> (Int, PutM Int)
+writeHmtx gs
+  | V.null gs = (0, return 0)
+  | otherwise = 
+    (tl,
+     do traverse_ (\g -> do putWord16be (advanceWidth g)
+                            putInt16be (leftSideBearing g)
+                  ) dbl
+        traverse_ (putInt16be.leftSideBearing) sngl
+        return (len*4 - tl*2)
+    ) where
+      findTail i cnt
+        | i < 0 = cnt
+        | advanceWidth (V.unsafeIndex gs i) == aw =
+            findTail (i-1) (cnt+1)
+        | otherwise = cnt
+      aw = advanceWidth (V.unsafeLast gs)
+      len = V.length gs
+      tl = findTail (len-1) 0
+      (dbl, sngl) = V.splitAt (len-tl) gs
   
 putGlyph :: Glyph -> Put
 putGlyph (Glyph _ _ xmin ymin xmax ymax outlines) = do
@@ -183,7 +199,7 @@ getGlyph = do
         else return [c]
   return $ Glyph 0 0 xmin ymin xmax ymax outlines
 
-isShort :: Int -> Bool
+isShort :: FWord -> Bool
 isShort n = abs n <= 255
 
 putCompressFlags :: [Word8] -> Put
@@ -254,7 +270,7 @@ getFlags n
                 (replicate (min m n) flag ++) <$> getFlags (n-m)
         else (flag:) <$> getFlags (n-1)
 
-getXcoords, getYcoords :: [Word8] -> Int -> Get [Int]
+getXcoords, getYcoords :: [Word8] -> FWord -> Get [FWord]
 getXcoords [] _ = return []
 getXcoords (f:r) prev 
   | byteAt f 1 = do
@@ -279,7 +295,7 @@ getYcoords (f:r) prev
       y <- fromIntegral <$> getWord16be
       (y:) <$> getYcoords r y
 
-getPoint :: Int -> Int -> Word8 -> CurvePoint
+getPoint :: FWord -> FWord -> Word8 -> CurvePoint
 getPoint x y flag = CurvePoint x y (byteAt flag 0)
 
 reGroup :: [a] -> [Int] -> [[a]]

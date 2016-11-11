@@ -5,6 +5,7 @@ import Data.Bits
 import Data.Binary.Put
 import Data.Binary.Get
 import qualified Data.ByteString.Lazy as Lazy
+import qualified Data.Map as M
 
 -- | A ShortFrac is an 16 bit signed fixed number with a bias of
 -- 14. This means it can represent numbers between 1.999 (0x7fff) and
@@ -23,7 +24,16 @@ type UFWord = Word16
 -- | the glyph index in the glyph table
 type GlyphID = Word16
 
--- return smallest power of 2 <= i 
+data PlatformID =
+  UnicodePlatform |
+  -- | /DEPRECATED/
+  MacintoshPlatform |
+  MicrosoftPlatform
+  deriving (Ord, Eq)
+
+
+type WordMap a = M.Map Word32 a
+-- return larged power of 2 <= i 
 iLog2 :: Integral a => a -> a
 iLog2 = iLog2' 0 where
   iLog2' base i
@@ -92,3 +102,18 @@ getWithBounds _ [] _ = Right []
 getWithBounds bStr (b:bs) getter = do
   (rest, res) <- safeGetTable bStr b getter
   (res:) <$> getWithBounds rest bs getter
+
+putPf :: PlatformID -> Put
+putPf UnicodePlatform = putWord16be 0
+putPf MacintoshPlatform = putWord16be 1
+putPf MicrosoftPlatform = putWord16be 3
+
+getPf :: Get PlatformID
+getPf = do
+  a <- getWord16be
+  case a of
+    0 -> return UnicodePlatform
+    1 -> return MacintoshPlatform
+    3 -> return MicrosoftPlatform
+    i -> fail $ "unknown platformID " ++ show i 
+

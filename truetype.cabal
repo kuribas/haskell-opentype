@@ -27,7 +27,7 @@ Library
     ghc >= 7.10.0,
     time > 1.4.0,
     vector >= 0.10,
-    pretty-hex >= 1.0
+    pretty-hex >= 1.0,
   Exposed-Modules:
     Truetype.Fileformat
   Other-Modules:
@@ -35,6 +35,10 @@ Library
     Truetype.Fileformat.Glyph
     Truetype.Fileformat.Cmap
     Truetype.Fileformat.Head
+    Truetype.Fileformat.Hhea
+    Truetype.Fileformat.Maxp
+    Truetype.Fileformat.Name
+    Truetype.Fileformat.Post
 
 test-suite test
   type: exitcode-stdio-1.0

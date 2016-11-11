@@ -16,13 +16,13 @@ data HheaTable = HheaTable {
   descent :: FWord,
   -- | typographic line gap
   lineGap :: FWord,
-  -- | Will be auto written.
+  -- | /Will be auto written./
   advanceWidthMax :: UFWord,
-  -- | Will be auto written.
+  -- | /Will be auto written./
   minLeftSideBearing :: FWord,
-  -- | Will be auto written.
+  -- | /Will be auto written./
   minRightSideBearing :: FWord,
-  -- | Will be auto written.
+  -- | /Will be auto written./
   xMaxExtent :: FWord,
   -- | used to calculate the slope of the caret (rise/run) set to 1 for vertical caret
   caretSlopeRise :: Int16,
@@ -30,10 +30,10 @@ data HheaTable = HheaTable {
   caretSlopeRun :: Int16,
   -- | set value to 0 for non-slanted fonts
   caretOffset :: FWord,
-  -- | number of advance widths in metrics table. Will be auto written.
+  -- | number of advance widths in metrics table. /Will be auto written./
   numOfLongHorMetrics :: Word16}
 
-putHheaTable :: HheaTable -> Put
+putHheaTable :: HheaTable -> PutM Int
 putHheaTable table = do
   putWord32be 0x00010000
   putInt16be $ ascent table
@@ -45,8 +45,10 @@ putHheaTable table = do
   putInt16be $ xMaxExtent table
   putInt16be $ caretSlopeRise table
   putInt16be $ caretSlopeRun table
-  replicateM_ 6 $ putInt16be 0
+  putInt16be $ caretOffset table
+  replicateM_ 5 $ putInt16be 0
   putWord16be $ numOfLongHorMetrics table
+  return 36
 
 getHheaTable :: Get HheaTable
 getHheaTable =
@@ -54,6 +56,5 @@ getHheaTable =
   getInt16be <*> getInt16be <*> getWord16be <*>
   getInt16be <*> getInt16be <*> getInt16be <*>
   getInt16be <*> getInt16be <*> getInt16be <*>
-  (getInt16be *> getInt16be *> getInt16be *>
-   getInt16be *> getInt16be *> getWord16be)
+  (skip 10 *> getWord16be)
   

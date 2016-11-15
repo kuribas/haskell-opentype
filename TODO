@@ -1,0 +1,3 @@
+ * don't write duplicates from name table
+ * do proper conversion from name table bytestrings
+ * auto-write bounding box in glyphs

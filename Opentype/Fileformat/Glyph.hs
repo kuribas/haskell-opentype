@@ -5,19 +5,21 @@ import Opentype.Fileformat.Maxp
 import Opentype.Fileformat.Hhea
 import Opentype.Fileformat.Head
 import qualified Data.Vector as V
-import Data.Foldable (traverse_, for_)
+import Data.Foldable (traverse_, for_, foldlM)
 import Control.Monad
+import Control.Monad.Cont
+import Data.List (foldl')
+import Data.Maybe (isJust, fromMaybe)
 import Data.Function (fix)
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString as Strict
 import Data.Word
 import Data.Int
-import Data.Maybe (isJust)
 import Data.Bits
 import Data.Binary
 import Data.Binary.Put
 import Data.Binary.Get
-
+import Lens.Micro
 
 -- | This table contains the data that defines the appearance of
 -- the glyphs in the font. This includes specification of the points
@@ -31,9 +33,13 @@ data GlyfTable = GlyfTable (V.Vector Glyph)
 data Glyph = Glyph {
   advanceWidth :: Word16,
   leftSideBearing :: Int16,
+  -- | Bounding box: /will be overwritten/
   glyphXmin :: FWord,
+  -- | Bounding box: /will be overwritten/
   glyphYmin :: FWord,
+  -- | Bounding box: /will be overwritten/
   glyphXmax :: FWord,
+  -- | Bounding box: /will be overwritten/
   glyphYmax :: FWord,
   glyphOutlines :: GlyphOutlines}
   deriving Show
@@ -42,6 +48,26 @@ data GlyphOutlines =
   GlyphContours [[CurvePoint]] Instructions |
   CompositeGlyph [GlyphComponent]
   deriving Show
+
+-- | traversal over simple glyph contours
+_glyphContours :: Traversal' Glyph [[CurvePoint]]
+_glyphContours f glyph = case glyphOutlines glyph of
+  GlyphContours pts instrs -> (\pts2 -> glyph {glyphOutlines = GlyphContours pts2 instrs})
+                              <$> f pts
+  _ -> pure glyph
+
+-- | instructions for simple glyphs
+_glyphInstructions :: Traversal' Glyph Instructions
+_glyphInstructions f glyph = case glyphOutlines glyph of
+  GlyphContours pts instrs -> (\instrs2 -> glyph {glyphOutlines = GlyphContours pts instrs2})
+                              <$> f instrs
+  _ -> pure glyph
+
+-- | traversal over compound glyph components
+_glyphComponents :: Traversal' Glyph [GlyphComponent]
+_glyphComponents f glyph = case glyphOutlines glyph of
+  CompositeGlyph comps -> (\c -> glyph {glyphOutlines = CompositeGlyph c}) <$> f comps
+  _ -> pure glyph
 
 -- | @CurvePoint x y onCurve@: Points used to describe the outline
 -- using lines and quadratic beziers.  Coordinates are absolute (not
@@ -75,7 +101,7 @@ data GlyphComponent =
   -- offset is unscaled (microsoft and opentype default) in the
   -- rasterizer.
   componentY :: Int,
-    -- | see previous
+  -- | see previous
   matchPoints :: Bool,
   -- | For the xy values if `matchPoints` is `False`.
   roundXYtoGrid :: Bool,
@@ -87,12 +113,16 @@ data GlyphComponent =
   -- affect behaviors in some platforms, however. (See Apple’s
   -- specification for details regarding behavior in Apple platforms.)
   overlapCompound :: Bool,
-  -- | The component offset is scaled by the rasterizer (apple).  Should be
-  -- set to `False` (opentype default), unless the font is meant to work
-  -- with old apple software.
-  scaledComponentOffset :: Bool
+  -- | If Just True, The component offset should be scaled by the
+  -- rasterizer.  If the value is set to Nothing, it is platform
+  -- dependent (False for opentype).  Set this value to "Just False"
+  -- for new fonts.
+  scaledComponentOffset :: Maybe Bool
   }
   deriving Show
+
+sum' :: Num a => [a] -> a
+sum' = foldl' (+) 0
 
 emptyGlyph :: Glyph
 emptyGlyph = Glyph 0 0 0 0 0 0 (GlyphContours [] V.empty)
@@ -129,8 +159,8 @@ readGlyphTable glyphSizes hmetrics glyfBs =
           Right (_, _, g) -> Right $ g {advanceWidth = aw, leftSideBearing = lsb}
 
 -- return bytestring lengths
-writeGlyphs :: V.Vector Glyph -> PutM (V.Vector Int)
-writeGlyphs = traverse writeGlyph
+writeGlyphs :: Bool -> V.Vector Glyph -> PutM (V.Vector Int)
+writeGlyphs scale vec = traverse (writeGlyph . updateBB scale vec) vec
 
 writeGlyph :: Glyph -> PutM Int
 writeGlyph g = do
@@ -261,7 +291,7 @@ putContour points instr = do
     allPts = case concat points of
       [] -> []
       pts@(p: pts2) -> p: zipWith subCoord pts2 pts
-    subCoord (CurvePoint x1 y1 _) (CurvePoint x2 y2 on) =
+    subCoord (CurvePoint x2 y2 on) (CurvePoint x1 y1 _) =
       CurvePoint (x2-x1) (y2-y1) on
     flags = case allPts of
       [] -> []
@@ -312,8 +342,7 @@ reGroup l (n:ns) = c : reGroup r ns
     (c, r) = splitAt n l
 
 toOffsets :: (Num a) => [a] -> [a]
-toOffsets [] = []
-toOffsets (x:xs) = scanl (-) x xs
+toOffsets = tail . scanl (+) 0 
   
 getContour :: Int -> Get GlyphOutlines
 getContour 0 =  return $ GlyphContours [] V.empty
@@ -338,8 +367,109 @@ glyphRsb g =
   
 glyphExtent glyf = leftSideBearing glyf + (glyphXmax glyf - glyphXmin glyf)
 
+extendBB :: (FWord, FWord, FWord, FWord)
+         -> (FWord, FWord, FWord, FWord)
+         -> (FWord, FWord, FWord, FWord) 
+extendBB (xMin1, yMin1, xMax1, yMax1)
+  (xMin2, yMin2, xMax2, yMax2) =
+  (min xMin1 xMin2, min yMin1 yMin2,
+   max xMax1 xMax2, max yMax1 yMax2)
+
+extendBB2 :: (FWord, FWord, FWord, FWord) -> CurvePoint
+          -> (FWord, FWord, FWord, FWord) 
+extendBB2 (xMin1, yMin1, xMax1, yMax1) (CurvePoint x y _) =
+  (min xMin1 x, min yMin1 y, max xMax1 x, max yMax1 y)
+
+minBB :: (FWord, FWord, FWord, FWord)
+minBB = (maxBound, maxBound, minBound, minBound)
+
+safeIndex :: Int -> [a] -> Maybe a
+safeIndex _ [] = Nothing
+safeIndex 0 (x:_) = Just x
+safeIndex n (_:l) = safeIndex (n-1) l
+
+onCurve :: CurvePoint -> Bool
+onCurve (CurvePoint _ _ on) = on
+
+-- get scaled on-curve points
+getScaledContours' :: Int -> Bool -> V.Vector Glyph -> Glyph -> [[CurvePoint]]
+getScaledContours' d scale vec glyph
+  | d <= 0 = []
+  | otherwise =
+    case glyphOutlines glyph of
+      GlyphContours cp _ -> cp
+      CompositeGlyph comps ->
+        flip runCont id $ callCC $ \exit ->
+        foldlM (scalePoints exit) [] comps
+    where
+      getCompContours :: GlyphComponent -> [[CurvePoint]]
+      getCompContours comp =
+        case vec V.!? componentID comp of
+          Nothing -> []
+          Just g2 -> getScaledContours' (d-1) scale vec g2
+      scalePoints :: ([[CurvePoint]] -> Cont [[CurvePoint]] [[CurvePoint]])
+                  -> [[CurvePoint]] -> GlyphComponent -> Cont [[CurvePoint]] [[CurvePoint]]
+      scalePoints exit pts comp
+        | matchPoints comp =
+            let pts2 = getCompContours comp
+                (tx, ty) = fromMaybe (0, 0) $ do
+                  CurvePoint x1 y1 _ <- safeIndex (componentX comp) $ concat pts
+                  CurvePoint x2 y2 _ <- safeIndex (componentY comp) $ concat pts2
+                  return (realToFrac $ x1-x2, realToFrac $ y1-y2)
+            in if useMyMetrics comp
+               then exit $ map (map (scalePt tx ty)) pts2
+               else return $ pts ++ map (map (scalePt tx ty)) pts2
+        | otherwise = 
+            if useMyMetrics comp
+            then exit $ map (map (scalePt offsetX offsetY)) (getCompContours comp)
+            else return $ pts ++ map (map (scalePt offsetX offsetY)) (getCompContours comp)
+            where
+              sqr x = x*x
+              (offsetX, offsetY) =
+                if fromMaybe scale (scaledComponentOffset comp)
+                then (realToFrac (componentX comp) *
+                      sqrt (sqr (realToFrac (componentXX comp)) +
+                            sqr (realToFrac (componentYX comp))),
+                      realToFrac (componentY comp) *
+                      sqrt (sqr (realToFrac (componentXY comp)) +
+                            sqr (realToFrac (componentYY comp))))
+                else (realToFrac (componentX comp), realToFrac (componentY comp))
+              xx, xy, yx, yy :: Double
+              (xx, xy, yx, yy) =
+                (realToFrac (componentXX comp),
+                 realToFrac (componentXY comp),
+                 realToFrac (componentYX comp),
+                 realToFrac (componentYY comp))
+              scalePt tx ty (CurvePoint x y on) =
+                if roundXYtoGrid comp then
+                  CurvePoint
+                  (round tx + round (realToFrac x * xx + realToFrac y * xy))
+                  (round ty + round (realToFrac x * yx + realToFrac y * yy))
+                  on
+                else
+                  CurvePoint
+                  (round $ realToFrac x * xx + realToFrac y * xy + tx)
+                  (round $ realToFrac x * yx + realToFrac y * yy + ty)
+                  on
+
+glyphBB :: Bool -> V.Vector Glyph -> Glyph -> (FWord, FWord, FWord, FWord)
+glyphBB scale vec glyph =
+  foldl' extendBB2 minBB $
+  filter onCurve $ concat $
+  getScaledContours' 10 scale vec glyph
+
+updateBB :: Bool -> V.Vector Glyph -> Glyph -> Glyph
+updateBB scale vec glyph =
+  glyph {glyphXmin = xMin_,
+         glyphYmin = yMin_,
+         glyphXmax = xMax_,
+         glyphYmax = yMax_}
+  where
+    (xMin_, yMin_, xMax_, yMax_) = glyphBB scale vec glyph
+
+
 updateHhea :: V.Vector Glyph -> HheaTable -> HheaTable
-updateHhea v h = V.foldl updateHhea1
+updateHhea v h = V.foldl' updateHhea1
                  (h {advanceWidthMax     = minBound,
                      minLeftSideBearing  = maxBound,
                      minRightSideBearing = maxBound,
@@ -360,7 +490,7 @@ updateHead vec headTbl =
   headTbl {xMin = xmin, yMin = ymin,
            xMax = xmax, yMax = ymax}
   where (xmin, ymin, xmax, ymax) =
-          V.foldl updateMinMax (maxBound, maxBound, minBound, minBound) vec
+          V.foldl' updateMinMax (maxBound, maxBound, minBound, minBound) vec
 
 updateHhea1 :: HheaTable -> Glyph -> HheaTable
 updateHhea1 hhea g =
@@ -373,7 +503,7 @@ updateHhea1 hhea g =
         xMaxExtent          = max (xMaxExtent hhea)
                               (glyphExtent g)}
 updateMaxp :: V.Vector Glyph -> MaxpTable -> MaxpTable
-updateMaxp vec tbl = V.foldl (updateMaxp1 vec)
+updateMaxp vec tbl = V.foldl' (updateMaxp1 vec)
                      (tbl {numGlyphs = 0,
                            maxPoints = 0,
                            maxContours = 0,
@@ -417,7 +547,7 @@ overComponents f h maxD d v g
 glyfPoints, glyfContours, componentRefs, componentDepth, componentPoints, componentContours :: V.Vector Glyph -> Glyph -> Word16
 
 glyfPoints  =
-  overComponents (sum . map (fromIntegral.length)) (const 0) 2 False
+  overComponents (sum' . map (fromIntegral.length)) (const 0) 2 False
 
 glyfContours =
   overComponents (fromIntegral.length) (const 0) 2 False
@@ -426,13 +556,13 @@ componentRefs =
   overComponents (const 0) (fromIntegral.length) 2 True
 
 componentPoints =
-  overComponents (sum . map (fromIntegral . length)) sum 10 True
+  overComponents (sum' . map (fromIntegral . length)) sum' 10 True
 
 componentDepth =
   overComponents (const 0) ((+1).maximum) 10 True
 
 componentContours =
-  overComponents (fromIntegral.length) sum 10 True
+  overComponents (fromIntegral.length) sum' 10 True
 
 putComponent :: Bool -> GlyphComponent -> Put
 putComponent more c = do
@@ -466,8 +596,8 @@ putComponent more c = do
           if matchPoints c
           then componentX c > 0xff ||
                componentY c > 0xff
-          else (not $ isShortInt $ componentX c) ||
-               (not $ isShortInt $ componentY c),
+          else not (isShortInt $ componentX c) ||
+               not (isShortInt $ componentY c),
           not $ matchPoints c,
           roundXYtoGrid c,
           componentXX c /= 1 &&
@@ -481,8 +611,8 @@ putComponent more c = do
           isJust (componentInstructions c),
           useMyMetrics c,
           overlapCompound c,
-          scaledComponentOffset c,
-          not $ scaledComponentOffset c]
+          fromMaybe False (scaledComponentOffset c),
+          not $ fromMaybe True (scaledComponentOffset c)]
 
 getComponent :: Get (GlyphComponent, Bool)
 getComponent = do
@@ -529,6 +659,9 @@ getComponent = do
   return (
     GlyphComponent (fromIntegral gID) instructions tXX tXY tYX tYY
       cX cY (not $ byteAt flag 1) (byteAt flag 2)
-      (byteAt flag 9) (byteAt flag 10) (byteAt flag 11),
+      (byteAt flag 9) (byteAt flag 10)
+      (if | (byteAt flag 11) -> Just True
+          | (byteAt flag 12) -> Just False
+          | otherwise -> Nothing),
     byteAt flag 5) -- more components
 

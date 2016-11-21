@@ -1,3 +1,4 @@
+{-# LANGUAGE TemplateHaskell #-}
 module Opentype.Fileformat.Kern
 where
 import Opentype.Fileformat.Types
@@ -7,6 +8,7 @@ import Data.Binary.Get
 import Data.Bits
 import Control.Monad
 import Data.Foldable
+import Lens.Micro.TH
 
 -- | @KernPair left right adjustment@: Pair of kerning values.  left
 -- and right are indices in the glyph table.
@@ -14,10 +16,12 @@ data KernPair = KernPair Word16 Word16 FWord
   deriving Show
 
 data KernTable = KernTable {
-  -- | various flags
+  -- | various flags, will be overwritten with 1 (default)
   coverage :: Word8,
   kernPairs :: [KernPair]}
   deriving Show
+
+makeLensesFor [("kernPairs", "_kernPairs")] ''KernTable
 
 getKernTable :: Get KernTable
 getKernTable = do
@@ -40,12 +44,12 @@ getKernTable = do
         KernPair <$> getWord16be <*>  getWord16be <*> getInt16be
 
 putKernTable :: KernTable -> Put
-putKernTable (KernTable cov pairs) = do
+putKernTable (KernTable _ pairs) = do
   putWord16be 0
   putWord16be 1
   putWord16be 0
   putWord16be $ fromIntegral $ 14+6 * length pairs
-  putWord16be $ fromIntegral cov
+  putWord16be $ fromIntegral 1
   putWord16be $ fromIntegral len
   putWord16be searchRange
   putWord16be entrySelector

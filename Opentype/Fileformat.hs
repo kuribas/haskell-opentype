@@ -1,4 +1,4 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections, TemplateHaskell #-}
 
 -- | This module provides opentype file loading and writing.  An
 -- attempt was made to have a higher level interface without
@@ -6,16 +6,22 @@
 
 module Opentype.Fileformat
        (-- * Types
-         ShortFrac (..), Fixed, FWord, UFWord, GlyphID,
+         ShortFrac (..), Fixed, FWord, UFWord, GlyphID, WordMap, 
          -- * Main datatype
-         OpentypeFont (..), maxpTable, glyfTable, OutlineTables (..), GenericTables,
+         OpentypeFont (..), OutlineTables (..), GenericTables,
+         -- ** OpentypeFont lenses
+         _headTable, _hheaTable, _cmapTable,
+         _nameTable, _postTable, _os2Table, _kernTable, _outlineTables, _otherTables,
+         _maxpTable, _glyfTable, 
          -- * IO
          readOTFile, writeOTFile,
          -- * Head table
          HeadTable(..),
          -- * Glyf table
-         GlyfTable(..), Glyph(..), GlyphOutlines(..),
+         GlyfTable(..), Glyph(..), GlyphOutlines(..), getScaledContours,
          CurvePoint(..), Instructions, GlyphComponent(..),
+         -- ** Glyf table lenses
+         _glyphContours, _glyphInstructions, _glyphComponents,
          -- * CMap table
          CmapTable(..), CMap(..), PlatformID(..), MapFormat (..),
          -- * Hhea table
@@ -29,7 +35,7 @@ module Opentype.Fileformat
          -- * OS/2 table
          OS2Table(..),
          -- * Kern table
-         KernTable(..), KernPair(..)
+         KernTable(..), KernPair(..), _kernPairs
        ) where
 import Opentype.Fileformat.Types
 import Opentype.Fileformat.Head
@@ -53,6 +59,9 @@ import Control.Monad
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString as Strict
 import Data.ByteString.Unsafe
+import Lens.Micro hiding (strict)
+import Lens.Micro.TH
+import Lens.Micro.Extras
 import qualified Data.Map as M
 
 type GenericTables = M.Map String Lazy.ByteString
@@ -82,21 +91,21 @@ data OpentypeFont = OpentypeFont {
   }
   deriving Show
 
+
 -- | tables for quadratic outlines (truetype or opentype)
 data OutlineTables =
   QuadTables MaxpTable GlyfTable |
   CubicTables 
   deriving Show
 
-maxpTable :: OpentypeFont -> Maybe MaxpTable
-maxpTable font = case outlineTables font of
-  QuadTables m _ -> Just m
-  _ -> Nothing
-
-glyfTable :: OpentypeFont -> Maybe GlyfTable
-glyfTable font = case outlineTables font of
-  QuadTables _ g -> Just g
-  _ -> Nothing
+makeLensesFor [("headTable", "_headTable"),
+               ("hheaTable", "_hheaTable"),
+               ("cmapTable", "_cmapTable"),
+               ("nameTable", "_nameTable"),
+               ("postTable", "_postTable"),
+               ("outlineTables", "_outlineTables"),
+               ("otherTables", "_otherTables")]
+               ''OpentypeFont
 
 data ScalerType =
   -- opentype with cff
@@ -110,6 +119,37 @@ data ScalerType =
 type SfntLocs = M.Map Scaler (Word32, Word32)
 type Scaler = Word32
 
+_maxpTable :: Traversal' OpentypeFont MaxpTable
+_maxpTable f font = case outlineTables font of
+  QuadTables m g -> (\m2 -> font { outlineTables = QuadTables m2 g })
+                    <$> f m
+  _ -> pure font
+
+_glyfTable :: Traversal' OpentypeFont GlyfTable
+_glyfTable f font = case outlineTables font of
+  QuadTables m g -> (\g2 -> font {outlineTables = QuadTables m g2})
+                    <$> f g
+  _ -> pure font
+
+_os2Table :: Traversal' OpentypeFont OS2Table
+_os2Table f font = case os2Table font of
+  Just t -> (\t2 -> font {os2Table = Just t2}) <$> f t
+  Nothing -> pure font
+
+_kernTable :: Traversal' OpentypeFont KernTable
+_kernTable f font = case kernTable font of
+  Just t -> (\t2 -> font {kernTable = Just t2}) <$> f t
+  Nothing -> pure font
+
+-- | @getScaledContours scaleOffset glyfTable glyph@: Get the scaled
+-- contours for a simple or composite glyph.
+getScaledContours :: OpentypeFont -> Glyph -> [[CurvePoint]]
+getScaledContours font glyph =
+  case preview _glyfTable font of
+    Nothing -> []
+    Just (GlyfTable vec) ->
+      getScaledContours' 10 (appleScaler font) vec glyph
+
 -- | write an opentype font to a file
 writeOTFile :: OpentypeFont -> FilePath -> IO ()
 writeOTFile font file = 
@@ -117,7 +157,7 @@ writeOTFile font file =
     CubicTables ->
       error "cubic splines are not yet supported"
     QuadTables maxpTbl (GlyfTable glyphs) ->
-       let (lengths, glyphBs) = runPutM $ writeGlyphs glyphs
+       let (lengths, glyphBs) = runPutM $ writeGlyphs (appleScaler font) glyphs
            (format, locaBs) = runPutM $ writeLoca lengths
            (longHor, hmtxBs) = runPutM $ writeHmtx glyphs
            head2 = updateHead glyphs $

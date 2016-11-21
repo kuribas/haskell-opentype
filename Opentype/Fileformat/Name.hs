@@ -1,12 +1,15 @@
 module Opentype.Fileformat.Name
 where
 import Opentype.Fileformat.Types
-import Data.List (sort)
+import Data.List (sort, foldl')
+import Data.Maybe (fromMaybe)
 import Data.Word
 import Control.Monad
 import Data.Binary.Put
+import Data.Tuple (swap)
 import Data.Foldable (for_, traverse_)
 import Data.Traversable (for)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.ByteString as Strict
 
 -- | This table allows multilingual strings to be associated with the
@@ -33,7 +36,7 @@ import qualified Data.ByteString as Strict
 -- encodingID.  This library doesn't do any conversion.  For more
 -- information see the opentype specification:
 -- https://www.microsoft.com/typography/otspec/name.htm
-data NameTable = NameTable [NameRecord]
+data NameTable = NameTable {nameRecords :: [NameRecord]}
   deriving Show
 
 data NameRecord = NameRecord {
@@ -59,18 +62,25 @@ putNameTable (NameTable records_) = do
   putWord16be 0
   putWord16be $ fromIntegral len
   putWord16be $ fromIntegral $ len * 12 + 6
-  for_ (zip offsets records) $ \(offset, r) -> do
+  for_ records $ \r -> do
     putPf $ namePlatform r
     putWord16be $ nameEncoding r
     putWord16be $ nameLanguage r
     putWord16be $ nameID r
     putWord16be $ fromIntegral $ Strict.length $ nameString r
-    putWord16be offset
-  traverse_ (putByteString.nameString) records
+    putWord16be $ fromMaybe 0 $ fromIntegral <$>
+      HM.lookup (nameString r) offsets
+  traverse_ putByteString $ reverse noDups
   where len = length records
         records = sort records_
-        lengths = map (fromIntegral . Strict.length . nameString) records
-        offsets = scanl (+) 0 lengths
+        (noDups, offsets) = snd $ foldl'
+          (\(offset, (noDups, mp)) r ->
+             if HM.member (nameString r) mp
+             then (offset, (noDups, mp))
+             else (Strict.length (nameString r) + offset, 
+                    (nameString r:noDups, HM.insert (nameString r) offset mp)))
+          (0, ([], HM.empty)) records
+        
 
 readNameTable :: Strict.ByteString -> Either String NameTable
 readNameTable bs = do

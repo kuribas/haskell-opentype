@@ -1,4 +1,4 @@
-{-# LANGUAGE MultiWayIf, TupleSections #-}
+{-# LANGUAGE MultiWayIf, TupleSections, DeriveTraversable #-}
 module Opentype.Fileformat.Glyph where
 import Opentype.Fileformat.Types
 import Opentype.Fileformat.Maxp
@@ -27,10 +27,19 @@ import Lens.Micro
 -- instructions that grid-fit that glyph. The glyf table supports the
 -- definition of simple glyphs and compound glyphs, that is, glyphs
 -- that are made up of other glyphs.
-data GlyfTable = GlyfTable (V.Vector Glyph)
+data GlyfTable = GlyfTable (V.Vector (Glyph Int))
   deriving Show
 
-data Glyph = Glyph {
+type StandardGlyph = Glyph Int
+
+emptyGlyfTable :: GlyfTable
+emptyGlyfTable = GlyfTable V.empty
+
+-- | The glyph type is parametrized over the type of glyph reference for compound glyphs.
+data Glyph a = Glyph {
+  -- | The name of the glyph.  This field isn't used when writing
+  -- truetype files.
+  glyphName :: String,
   advanceWidth :: Word16,
   leftSideBearing :: Int16,
   -- | Bounding box: /will be overwritten/
@@ -41,30 +50,30 @@ data Glyph = Glyph {
   glyphXmax :: FWord,
   -- | Bounding box: /will be overwritten/
   glyphYmax :: FWord,
-  glyphOutlines :: GlyphOutlines}
-  deriving Show
+  glyphOutlines :: GlyphOutlines a}
+  deriving (Show, Functor, Foldable, Traversable)
 
-data GlyphOutlines =
+data GlyphOutlines a =
   GlyphContours [[CurvePoint]] Instructions |
-  CompositeGlyph [GlyphComponent]
-  deriving Show
+  CompositeGlyph [GlyphComponent a]
+  deriving (Show, Functor, Foldable, Traversable)
 
 -- | traversal over simple glyph contours
-_glyphContours :: Traversal' Glyph [[CurvePoint]]
+_glyphContours :: Traversal' StandardGlyph [[CurvePoint]]
 _glyphContours f glyph = case glyphOutlines glyph of
   GlyphContours pts instrs -> (\pts2 -> glyph {glyphOutlines = GlyphContours pts2 instrs})
                               <$> f pts
   _ -> pure glyph
 
 -- | instructions for simple glyphs
-_glyphInstructions :: Traversal' Glyph Instructions
+_glyphInstructions :: Traversal' StandardGlyph Instructions
 _glyphInstructions f glyph = case glyphOutlines glyph of
   GlyphContours pts instrs -> (\instrs2 -> glyph {glyphOutlines = GlyphContours pts instrs2})
                               <$> f instrs
   _ -> pure glyph
 
 -- | traversal over compound glyph components
-_glyphComponents :: Traversal' Glyph [GlyphComponent]
+_glyphComponents :: Traversal' StandardGlyph [GlyphComponent Int]
 _glyphComponents f glyph = case glyphOutlines glyph of
   CompositeGlyph comps -> (\c -> glyph {glyphOutlines = CompositeGlyph c}) <$> f comps
   _ -> pure glyph
@@ -79,9 +88,9 @@ data CurvePoint = CurvePoint FWord FWord Bool
 -- | TODO: make a proper datatype for instructions.
 type Instructions = V.Vector Word8
 
-data GlyphComponent =
+data GlyphComponent a =
   GlyphComponent {
-  componentID :: Int,
+  componentID :: a,
   componentInstructions :: Maybe Instructions,
   -- | transformation matrix for scaling the glyph
   componentXX :: ShortFrac,
@@ -119,13 +128,13 @@ data GlyphComponent =
   -- for new fonts.
   scaledComponentOffset :: Maybe Bool
   }
-  deriving Show
+  deriving (Show, Functor, Foldable, Traversable)
 
 sum' :: Num a => [a] -> a
 sum' = foldl' (+) 0
 
-emptyGlyph :: Glyph
-emptyGlyph = Glyph 0 0 0 0 0 0 (GlyphContours [] V.empty)
+emptyGlyph :: StandardGlyph
+emptyGlyph = Glyph ".notdef" 0 0 0 0 0 0 (GlyphContours [] V.empty)
 
 readHmetrics :: Int -> Int -> Get [(Word16, Int16)]
 readHmetrics 1 m = do
@@ -146,7 +155,7 @@ readGlyphLocs long n =
   else (*2).fromIntegral <$> getWord16be
  
 readGlyphTable :: [(Int, Int)] -> [(Word16, Int16)] -> Strict.ByteString
-               -> Either String (V.Vector Glyph)
+               -> Either String (V.Vector StandardGlyph)
 readGlyphTable glyphSizes hmetrics glyfBs =
   V.fromList <$> zipWithM readGlyph glyphSizes hmetrics
   where
@@ -159,10 +168,10 @@ readGlyphTable glyphSizes hmetrics glyfBs =
           Right (_, _, g) -> Right $ g {advanceWidth = aw, leftSideBearing = lsb}
 
 -- return bytestring lengths
-writeGlyphs :: Bool -> V.Vector Glyph -> PutM (V.Vector Int)
+writeGlyphs :: Bool -> V.Vector StandardGlyph -> PutM (V.Vector Int)
 writeGlyphs scale vec = traverse (writeGlyph . updateBB scale vec) vec
 
-writeGlyph :: Glyph -> PutM Int
+writeGlyph :: StandardGlyph -> PutM Int
 writeGlyph g = do
   putLazyByteString bs
   replicateM_ pad (putWord8 0)
@@ -183,7 +192,7 @@ writeLoca vec
   where
     offsets = V.scanl (+) 0 vec
     
-writeHmtx :: V.Vector Glyph -> PutM Int
+writeHmtx :: V.Vector StandardGlyph -> PutM Int
 writeHmtx gs
   | V.null gs = return 0
   | otherwise = 
@@ -203,8 +212,8 @@ writeHmtx gs
       tl = findTail (len-2) 0
       (dbl, sngl) = V.splitAt (len-tl) gs
   
-putGlyph :: Glyph -> Put
-putGlyph (Glyph _ _ xmin ymin xmax ymax outlines) = do
+putGlyph :: StandardGlyph -> Put
+putGlyph (Glyph _ _ _ xmin ymin xmax ymax outlines) = do
   putInt16be $ case outlines of
     GlyphContours pts _ -> fromIntegral $ length pts
     _ -> -1
@@ -219,7 +228,7 @@ putGlyph (Glyph _ _ xmin ymin xmax ymax outlines) = do
       traverse_ (putComponent True) (init comps)
       putComponent False $ last comps
 
-getGlyph :: Get Glyph
+getGlyph :: Get StandardGlyph
 getGlyph = do
   n <- getInt16be
   xmin <- getInt16be
@@ -233,7 +242,7 @@ getGlyph = do
       (c, more) <- getComponent
       if more then (c:) <$> nextComponent
         else return [c]
-  return $ Glyph 0 0 xmin ymin xmax ymax outlines
+  return $ Glyph "" 0 0 xmin ymin xmax ymax outlines
 
 isShort :: FWord -> Bool
 isShort n = abs n <= 255
@@ -344,7 +353,7 @@ reGroup l (n:ns) = c : reGroup r ns
 toOffsets :: (Num a) => [a] -> [a]
 toOffsets = tail . scanl (+) 0 
   
-getContour :: Int -> Get GlyphOutlines
+getContour :: Int -> Get (GlyphOutlines Int)
 getContour 0 =  return $ GlyphContours [] V.empty
 getContour nContours = do
   lastPts <- replicateM nContours (fromIntegral <$> getWord16be)
@@ -361,7 +370,7 @@ getContour nContours = do
 isShortInt :: Int -> Bool
 isShortInt x = x <= 127 && x >= -128
 
-glyphExtent, glyphRsb :: Glyph -> Int16
+glyphExtent, glyphRsb :: StandardGlyph -> Int16
 glyphRsb g =
   fromIntegral (advanceWidth g) - glyphExtent g
   
@@ -392,7 +401,7 @@ onCurve :: CurvePoint -> Bool
 onCurve (CurvePoint _ _ on) = on
 
 -- get scaled on-curve points
-getScaledContours' :: Int -> Bool -> V.Vector Glyph -> Glyph -> [[CurvePoint]]
+getScaledContours' :: Int -> Bool -> V.Vector StandardGlyph -> StandardGlyph -> [[CurvePoint]]
 getScaledContours' d scale vec glyph
   | d <= 0 = []
   | otherwise =
@@ -402,13 +411,13 @@ getScaledContours' d scale vec glyph
         flip runCont id $ callCC $ \exit ->
         foldlM (scalePoints exit) [] comps
     where
-      getCompContours :: GlyphComponent -> [[CurvePoint]]
+      getCompContours :: GlyphComponent Int -> [[CurvePoint]]
       getCompContours comp =
         case vec V.!? componentID comp of
           Nothing -> []
           Just g2 -> getScaledContours' (d-1) scale vec g2
       scalePoints :: ([[CurvePoint]] -> Cont [[CurvePoint]] [[CurvePoint]])
-                  -> [[CurvePoint]] -> GlyphComponent -> Cont [[CurvePoint]] [[CurvePoint]]
+                  -> [[CurvePoint]] -> GlyphComponent Int -> Cont [[CurvePoint]] [[CurvePoint]]
       scalePoints exit pts comp
         | matchPoints comp =
             let pts2 = getCompContours comp
@@ -452,13 +461,13 @@ getScaledContours' d scale vec glyph
                   (round $ realToFrac x * yx + realToFrac y * yy + ty)
                   on
 
-glyphBB :: Bool -> V.Vector Glyph -> Glyph -> (FWord, FWord, FWord, FWord)
+glyphBB :: Bool -> V.Vector StandardGlyph -> StandardGlyph -> (FWord, FWord, FWord, FWord)
 glyphBB scale vec glyph =
   foldl' extendBB2 minBB $
   filter onCurve $ concat $
   getScaledContours' 10 scale vec glyph
 
-updateBB :: Bool -> V.Vector Glyph -> Glyph -> Glyph
+updateBB :: Bool -> V.Vector StandardGlyph -> StandardGlyph -> StandardGlyph
 updateBB scale vec glyph =
   glyph {glyphXmin = xMin_,
          glyphYmin = yMin_,
@@ -468,7 +477,7 @@ updateBB scale vec glyph =
     (xMin_, yMin_, xMax_, yMax_) = glyphBB scale vec glyph
 
 
-updateHhea :: V.Vector Glyph -> HheaTable -> HheaTable
+updateHhea :: V.Vector StandardGlyph -> HheaTable -> HheaTable
 updateHhea v h = V.foldl' updateHhea1
                  (h {advanceWidthMax     = minBound,
                      minLeftSideBearing  = maxBound,
@@ -478,21 +487,21 @@ updateHhea v h = V.foldl' updateHhea1
   
 
 updateMinMax :: (FWord, FWord, FWord, FWord)
-             -> Glyph -> (FWord, FWord, FWord, FWord)
+             -> StandardGlyph -> (FWord, FWord, FWord, FWord)
 updateMinMax (xmin, ymin, xmax, ymax) g =
   (min xmin (glyphXmin g),
    min ymin (glyphYmin g),
    max xmax (glyphXmax g),
    max ymax (glyphYmax g))
 
-updateHead :: V.Vector Glyph -> HeadTable -> HeadTable
+updateHead :: V.Vector StandardGlyph -> HeadTable -> HeadTable
 updateHead vec headTbl =
   headTbl {xMin = xmin, yMin = ymin,
            xMax = xmax, yMax = ymax}
   where (xmin, ymin, xmax, ymax) =
           V.foldl' updateMinMax (maxBound, maxBound, minBound, minBound) vec
 
-updateHhea1 :: HheaTable -> Glyph -> HheaTable
+updateHhea1 :: HheaTable -> StandardGlyph -> HheaTable
 updateHhea1 hhea g =
   hhea {advanceWidthMax     = max (advanceWidthMax hhea)
                               (advanceWidth g),
@@ -502,7 +511,7 @@ updateHhea1 hhea g =
                               (glyphRsb g),
         xMaxExtent          = max (xMaxExtent hhea)
                               (glyphExtent g)}
-updateMaxp :: V.Vector Glyph -> MaxpTable -> MaxpTable
+updateMaxp :: V.Vector StandardGlyph -> MaxpTable -> MaxpTable
 updateMaxp vec tbl = V.foldl' (updateMaxp1 vec)
                      (tbl {numGlyphs = 0,
                            maxPoints = 0,
@@ -513,7 +522,7 @@ updateMaxp vec tbl = V.foldl' (updateMaxp1 vec)
                            maxComponentDepth = 0})
                      vec
 
-updateMaxp1 :: V.Vector Glyph -> MaxpTable -> Glyph -> MaxpTable
+updateMaxp1 :: V.Vector StandardGlyph -> MaxpTable -> StandardGlyph -> MaxpTable
 updateMaxp1 vec maxp glyf =
   maxp {numGlyphs            = numGlyphs maxp + 1,
         maxPoints            = max (maxPoints maxp) $
@@ -530,7 +539,7 @@ updateMaxp1 vec maxp glyf =
                                componentDepth vec glyf}
 
 overComponents :: ([[CurvePoint]] -> Word16) -> ([Word16] ->  Word16)
-               -> Int -> Bool -> V.Vector Glyph -> Glyph -> Word16
+               -> Int -> Bool -> V.Vector StandardGlyph -> StandardGlyph -> Word16
 overComponents f h maxD d v g
   | maxD <= 0 = 0
   | otherwise =
@@ -544,7 +553,7 @@ overComponents f h maxD d v g
                 Nothing -> 0
                 Just g2 -> overComponents f h (maxD-1) False v g2 
   
-glyfPoints, glyfContours, componentRefs, componentDepth, componentPoints, componentContours :: V.Vector Glyph -> Glyph -> Word16
+glyfPoints, glyfContours, componentRefs, componentDepth, componentPoints, componentContours :: V.Vector StandardGlyph -> StandardGlyph -> Word16
 
 glyfPoints  =
   overComponents (sum' . map (fromIntegral.length)) (const 0) 2 False
@@ -564,7 +573,7 @@ componentDepth =
 componentContours =
   overComponents (fromIntegral.length) sum' 10 True
 
-putComponent :: Bool -> GlyphComponent -> Put
+putComponent :: Bool -> GlyphComponent Int -> Put
 putComponent more c = do
   putWord16be flag
   putWord16be $ fromIntegral $ componentID c
@@ -614,7 +623,7 @@ putComponent more c = do
           fromMaybe False (scaledComponentOffset c),
           not $ fromMaybe True (scaledComponentOffset c)]
 
-getComponent :: Get (GlyphComponent, Bool)
+getComponent :: Get (GlyphComponent Int, Bool)
 getComponent = do
   flag <- getWord16be
   gID <- getWord16be

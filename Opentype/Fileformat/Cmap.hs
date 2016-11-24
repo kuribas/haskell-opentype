@@ -66,6 +66,9 @@ import Data.Int
 data CmapTable = CmapTable [CMap]
   deriving Show
 
+emptyCmapTable :: CmapTable
+emptyCmapTable = CmapTable []
+
 data CMap = CMap {
   cmapPlatform :: PlatformID,
   cmapEncoding :: Word16,
@@ -351,7 +354,7 @@ putMap4 cmap = do
       size, segCount, searchRange, entrySelector :: Word16
       entrySelector = iLog2 segCount
       searchRange = 1 `shift` (fromIntegral $ entrySelector+1)
-      segments = getSegments $ M.toList $ glyphMap cmap
+      segments = getSegments $ M.toList $ subIntMap 0 0xffff $ glyphMap cmap
       (codeSize, layout) = mapAccumL foldLayout (segCount*2) segments
       foldLayout offset (RangeSegment start len code) =
         (offset-2, Segment4layout (fromIntegral $ start+len-1)

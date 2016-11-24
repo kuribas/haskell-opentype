@@ -19,11 +19,13 @@ module Opentype.Fileformat
          HeadTable(..),
          -- * Glyf table
          GlyfTable(..), Glyph(..), GlyphOutlines(..), getScaledContours,
+         emptyGlyfTable,
          CurvePoint(..), Instructions, GlyphComponent(..),
          -- ** Glyf table lenses
          _glyphContours, _glyphInstructions, _glyphComponents,
          -- * CMap table
          CmapTable(..), CMap(..), PlatformID(..), MapFormat (..),
+         emptyCmapTable, 
          -- * Hhea table
          HheaTable(..),
          -- * Maxp table
@@ -143,7 +145,7 @@ _kernTable f font = case kernTable font of
 
 -- | @getScaledContours scaleOffset glyfTable glyph@: Get the scaled
 -- contours for a simple or composite glyph.
-getScaledContours :: OpentypeFont -> Glyph -> [[CurvePoint]]
+getScaledContours :: OpentypeFont -> StandardGlyph -> [[CurvePoint]]
 getScaledContours font glyph =
   case preview _glyfTable font of
     Nothing -> []

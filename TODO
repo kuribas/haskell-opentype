@@ -1,6 +1,3 @@
  * do proper conversion for name table bytestrings
- * auto-write bounding box in glyphs
  * add more fields to Glyph from other tables
- * automatically writing tables from unicode glyph data: glyf, cmap, post
- * conversion between postTable names and unicode points
- * helper module for making standard complient font descriptions 
+ * helper module for making standard complient font descriptions

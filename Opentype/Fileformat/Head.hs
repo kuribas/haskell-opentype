@@ -15,7 +15,7 @@ import Data.Int
 -- most likely to be written and other information about the placement
 -- of glyphs in the em square.
 data HeadTable = HeadTable {
-  -- | 0x00010000 for version 1.0.  /Will be auto written./
+  -- | 0x00010000 for version 1.0.  /Will be overwritten./
   headVersion :: Fixed,
   -- | set by font manufacturer.
   fontRevision :: Fixed,
@@ -77,13 +77,13 @@ data HeadTable = HeadTable {
   -- bit 15 zero
   unitsPerEm :: Word16,
   created :: UTCTime,  modified :: UTCTime,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   xMin :: FWord,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   yMin :: FWord,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   xMax :: FWord,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   yMax :: FWord,
   -- macStyle
   
@@ -98,9 +98,9 @@ data HeadTable = HeadTable {
   lowerRecPPEM :: Word16,
   -- | deprecated, will be set to 2
   fontDirectionHint :: Int16,
-  -- | 0 for short offsets, 1 for long.  /Will be auto written./
+  -- | 0 for short offsets, 1 for long.  /Will be overwritten./
   longLocIndices :: Bool,
-  -- | 0 for current format.  /Will be auto written./
+  -- | 0 for current format.  /Will be overwritten./
   glyphDataFormat :: Int16
   }
   deriving Show

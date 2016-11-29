@@ -63,7 +63,7 @@ import Data.Int
 -- * 5: Johab
 -- * 10: Unicode UCS-4
 
-data CmapTable = CmapTable [CMap]
+newtype CmapTable = CmapTable {getCmaps :: [CMap]}
   deriving Show
 
 emptyCmapTable :: CmapTable

@@ -9,21 +9,21 @@ import Control.Monad
 
 -- | This table contains information for horizontal layout. 
 data HheaTable = HheaTable {
-  -- | 0x00010000 (1.0), will be auto written.
+  -- | 0x00010000 (1.0), will be overwritten.
   version :: Fixed,
-  -- | Distance from baseline of highest ascender
+  -- | Distance from baseline of highest ascender.  /Will be overwritten./
   ascent :: FWord,
-  -- | Distance from baseline of lowest descender
+  -- | Distance from baseline of lowest descender.  /Will be overwritten./
   descent :: FWord,
-  -- | typographic line gap
+  -- | typographic line gap.  Will be overwritten when OS/2 table is present.
   lineGap :: FWord,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   advanceWidthMax :: UFWord,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   minLeftSideBearing :: FWord,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   minRightSideBearing :: FWord,
-  -- | /Will be auto written./
+  -- | /Will be overwritten./
   xMaxExtent :: FWord,
   -- | used to calculate the slope of the caret (rise/run) set to 1 for vertical caret
   caretSlopeRise :: Int16,
@@ -31,7 +31,7 @@ data HheaTable = HheaTable {
   caretSlopeRun :: Int16,
   -- | set value to 0 for non-slanted fonts
   caretOffset :: FWord,
-  -- | number of advance widths in metrics table. /Will be auto written./
+  -- | number of advance widths in metrics table. /Will be overwritten./
   numOfLongHorMetrics :: Word16}
   deriving Show
 

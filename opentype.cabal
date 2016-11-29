@@ -34,7 +34,8 @@ library
                 vector >=0.10
   exposed-modules:
                   Opentype.Fileformat
-                  Opentype.Fileformat.Unicode    
+                  Opentype.Fileformat.Unicode
+                  Opentype.Fileformat.FontInfo
   exposed: True
   buildable: True
   other-modules:

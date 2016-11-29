@@ -27,7 +27,7 @@ import Lens.Micro
 -- instructions that grid-fit that glyph. The glyf table supports the
 -- definition of simple glyphs and compound glyphs, that is, glyphs
 -- that are made up of other glyphs.
-data GlyfTable = GlyfTable (V.Vector (Glyph Int))
+newtype GlyfTable = GlyfTable {glyphVector :: (V.Vector (Glyph Int))}
   deriving Show
 
 type StandardGlyph = Glyph Int
@@ -408,30 +408,28 @@ getScaledContours' d scale vec glyph
     case glyphOutlines glyph of
       GlyphContours cp _ -> cp
       CompositeGlyph comps ->
-        flip runCont id $ callCC $ \exit ->
-        foldlM (scalePoints exit) [] comps
+        flip runCont id $ foldlM scalePoints [] comps
     where
       getCompContours :: GlyphComponent Int -> [[CurvePoint]]
       getCompContours comp =
         case vec V.!? componentID comp of
           Nothing -> []
           Just g2 -> getScaledContours' (d-1) scale vec g2
-      scalePoints :: ([[CurvePoint]] -> Cont [[CurvePoint]] [[CurvePoint]])
-                  -> [[CurvePoint]] -> GlyphComponent Int -> Cont [[CurvePoint]] [[CurvePoint]]
-      scalePoints exit pts comp
-        | matchPoints comp =
+      scalePoints :: [[CurvePoint]] -> GlyphComponent Int -> Cont [[CurvePoint]] [[CurvePoint]]
+      scalePoints pts comp
+        | matchPoints comp = cont $ \next -> 
             let pts2 = getCompContours comp
                 (tx, ty) = fromMaybe (0, 0) $ do
                   CurvePoint x1 y1 _ <- safeIndex (componentX comp) $ concat pts
                   CurvePoint x2 y2 _ <- safeIndex (componentY comp) $ concat pts2
                   return (realToFrac $ x1-x2, realToFrac $ y1-y2)
             in if useMyMetrics comp
-               then exit $ map (map (scalePt tx ty)) pts2
-               else return $ pts ++ map (map (scalePt tx ty)) pts2
-        | otherwise = 
+               then map (map (scalePt tx ty)) pts2
+               else next $ pts ++ map (map (scalePt tx ty)) pts2
+        | otherwise =  cont $ \next -> 
             if useMyMetrics comp
-            then exit $ map (map (scalePt offsetX offsetY)) (getCompContours comp)
-            else return $ pts ++ map (map (scalePt offsetX offsetY)) (getCompContours comp)
+            then map (map (scalePt offsetX offsetY)) (getCompContours comp)
+            else next $ pts ++ map (map (scalePt offsetX offsetY)) (getCompContours comp)
             where
               sqr x = x*x
               (offsetX, offsetY) =
@@ -486,21 +484,20 @@ updateHhea v h = V.foldl' updateHhea1
                  v
   
 
-updateMinMax :: (FWord, FWord, FWord, FWord)
-             -> StandardGlyph -> (FWord, FWord, FWord, FWord)
-updateMinMax (xmin, ymin, xmax, ymax) g =
+updateMinMax  :: (FWord, FWord, FWord, FWord, Double)
+              -> StandardGlyph -> (FWord, FWord, FWord, FWord, Double)
+updateMinMax (xmin, ymin, xmax, ymax, totWidth) g =
   (min xmin (glyphXmin g),
    min ymin (glyphYmin g),
    max xmax (glyphXmax g),
-   max ymax (glyphYmax g))
+   max ymax (glyphYmax g),
+   totWidth + realToFrac (glyphXmax g - glyphXmin g))
 
-updateHead :: V.Vector StandardGlyph -> HeadTable -> HeadTable
-updateHead vec headTbl =
-  headTbl {xMin = xmin, yMin = ymin,
-           xMax = xmax, yMax = ymax}
-  where (xmin, ymin, xmax, ymax) =
-          V.foldl' updateMinMax (maxBound, maxBound, minBound, minBound) vec
-
+getMinMax :: V.Vector StandardGlyph -> (FWord, FWord, FWord, FWord, FWord)
+getMinMax vec =
+  over _5 (round . (/ realToFrac (V.length vec))) $
+  V.foldl' updateMinMax (maxBound, maxBound, minBound, minBound, 0) vec
+  
 updateHhea1 :: HheaTable -> StandardGlyph -> HheaTable
 updateHhea1 hhea g =
   hhea {advanceWidthMax     = max (advanceWidthMax hhea)

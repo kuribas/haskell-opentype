@@ -18,7 +18,7 @@ module Opentype.Fileformat
          -- * Head table
          HeadTable(..),
          -- * Glyf table
-         GlyfTable(..), Glyph(..), GlyphOutlines(..), getScaledContours,
+         GlyfTable(..), Glyph(..), StandardGlyph, GlyphOutlines(..), getScaledContours,
          emptyGlyfTable,
          CurvePoint(..), Instructions, GlyphComponent(..),
          -- ** Glyf table lenses
@@ -64,6 +64,7 @@ import Data.ByteString.Unsafe
 import Lens.Micro hiding (strict)
 import Lens.Micro.TH
 import Lens.Micro.Extras
+import qualified Data.Vector as V
 import qualified Data.Map as M
 
 type GenericTables = M.Map String Lazy.ByteString
@@ -152,6 +153,19 @@ getScaledContours font glyph =
     Just (GlyfTable vec) ->
       getScaledContours' 10 (appleScaler font) vec glyph
 
+getWindowsMap :: OpentypeFont -> Maybe CMap
+getWindowsMap font =
+  find (\cm -> cmapPlatform cm == MicrosoftPlatform &&
+               cmapEncoding cm `elem` [0, 1]) $
+  getCmaps $ cmapTable font
+  
+getUnicodeChar :: OpentypeFont -> Word32 -> Maybe (Glyph Int)
+getUnicodeChar font c = do
+  mp <- getWindowsMap font
+  gID <- fmap fromIntegral $ M.lookup c $ glyphMap mp
+  (V.!? gID) =<< glyphVector <$>
+    preview _glyfTable font
+
 -- | write an opentype font to a file
 writeOTFile :: OpentypeFont -> FilePath -> IO ()
 writeOTFile font file = 
@@ -162,13 +176,28 @@ writeOTFile font file =
        let (lengths, glyphBs) = runPutM $ writeGlyphs (appleScaler font) glyphs
            (format, locaBs) = runPutM $ writeLoca lengths
            (longHor, hmtxBs) = runPutM $ writeHmtx glyphs
-           head2 = updateHead glyphs $
-                   (headTable font) {
+           (xmin, ymin, xmax, ymax, _avgWdt) = getMinMax glyphs
+           head2 = (headTable font) {
                      headVersion = 0x00010000,
+                     xMin = xmin,
+                     yMin = ymin,
+                     xMax = xmax,
+                     yMax = ymax,
                      fontDirectionHint = 2,
                      longLocIndices = format }
+           theAscent | ascent (hheaTable font) == 0 = fromIntegral ymax
+                     | otherwise = ascent (hheaTable font)
+           theDescent | descent (hheaTable font) == 0 = fromIntegral ymin
+                      | otherwise = descent (hheaTable font)
+           theLineGap = case os2Table font of
+             Just os2 -> fromIntegral (unitsPerEm head2) + sTypoLineGap os2 -
+                         ascent hhea2 + descent hhea2
+             Nothing -> lineGap (hheaTable font)
            hhea2 = updateHhea glyphs $
-                   (hheaTable font) {numOfLongHorMetrics = fromIntegral longHor}
+                   (hheaTable font) {numOfLongHorMetrics = fromIntegral longHor,
+                                     ascent = theAscent,
+                                     descent= theDescent,
+                                     lineGap= theLineGap}
            maxp2 = updateMaxp glyphs $
                    maxpTbl {maxpVersion = 0x00010000}
            headBs = Lazy.toStrict $ runPut $ putHeadTable head2
@@ -177,7 +206,28 @@ writeOTFile font file =
            maxpBs = Lazy.toStrict $ runPut $ putMaxpTable maxp2 
            nameBs = Lazy.toStrict $ runPut $ putNameTable $ nameTable font
            postBs = Lazy.toStrict $ runPut $ putPostTable $ postTable font
-           os2Bs  = (Lazy.toStrict . runPut . putOS2Table) <$> os2Table font
+           os2Bs  = (Lazy.toStrict . runPut . putOS2Table .
+                      (\os2 -> os2 {
+                          usWinAscent = fromIntegral theAscent,
+                          usWinDescent = fromIntegral $ -theDescent,
+                          usFirstCharIndex = fromMaybe 0 $ do
+                              mp <- getWindowsMap font
+                              Just $ fromIntegral $ fst $ M.findMin $ glyphMap mp,
+                          usLastCharIndex = fromMaybe 0xffff $ do
+                              mp <- getWindowsMap font
+                              let l = fst $ M.findMax $ glyphMap mp
+                              if l > 0xffff then Nothing else Just $ fromIntegral l,
+                          sxHeight =
+                              if sxHeight os2 == 0
+                              then fromMaybe 0 $
+                                   glyphYmax <$> getUnicodeChar font 0x0078
+                              else sxHeight os2,
+                          sCapHeight =
+                              if sCapHeight os2 == 0
+                              then fromMaybe 0 $
+                                   glyphYmax <$> getUnicodeChar font 0x0048
+                              else sCapHeight os2}))
+                    <$> os2Table font
            kernBs = (Lazy.toStrict . runPut . putKernTable) <$> kernTable font
            scaler | appleScaler font = AppleScaler 
                   | otherwise = QuadScaler

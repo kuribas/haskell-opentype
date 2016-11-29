@@ -35,8 +35,6 @@ data PostTable = PostTable {
   -- vertical. Zero for upright text, negative for text that leans to
   -- the right (forward).
   italicAngle :: Fixed,
-  -- | suggested values for the underline thickness.
-  underlinePosition :: FWord,
   -- | This is the suggested distance of the top of the underline from
   -- the baseline (negative values indicate below baseline).
   --
@@ -45,6 +43,8 @@ data PostTable = PostTable {
   -- historical reasons. The value of the PostScript key may be
   -- calculated by subtracting half the underlineThickness from the
   -- value of this field.
+  underlinePosition :: FWord,
+  -- | suggested values for the underline thickness.
   underlineThickness :: FWord,
   -- | Set to 0 if the font is proportionally spaced, non-zero if the
   -- font is not proportionally spaced (i.e. monospaced).

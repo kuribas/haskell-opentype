@@ -1,7 +1,6 @@
--- | The goal of this module is to make it easier to fill in the
--- global font information, without having to write to multiple
--- tables, and ensuring consistency.  For most fields sensible defaults
--- are provided.
+-- | This module implements a somewhat more logical structure
+-- containing font information, without the need for an in-depth study
+-- of the opentype spec.
 module Opentype.Fileformat.FontInfo (FontInfo(..), Weight(..),
                                      Width(..), Slant(..), Decoration(..),
                                      EmbedLicence(..), infoToTables)

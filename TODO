@@ -1,3 +1,2 @@
- * do proper conversion for name table bytestrings
+ * support more languages and encodings for name table generation
  * add more fields to Glyph from other tables
- * helper module for making standard complient font descriptions

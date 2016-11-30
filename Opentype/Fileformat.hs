@@ -29,7 +29,7 @@ module Opentype.Fileformat
          -- * Hhea table
          HheaTable(..),
          -- * Maxp table
-         MaxpTable(..),
+         MaxpTable(..), emptyMaxpTable,
          -- * Name table
          NameTable(..), NameRecord(..),
          -- * Post table

@@ -10,7 +10,7 @@ module Opentype.Fileformat.Unicode
 where
 import Opentype.Fileformat.Unicode.PostNames
 import Opentype.Fileformat
-import Opentype.Fileformat.Glyph
+import Opentype.Fileformat.FontInfo
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import qualified Data.Vector as V
 import qualified Data.Map as M
@@ -27,6 +27,20 @@ import Data.Function
 -- key in the map, it will be substituted by the empty glyph
 type UnicodeGlyphMap = HM.HashMap String (Glyph String)
 type UnicodeKernPairs = [(String, String, FWord)]
+
+-- | Create an opentype font from a `UnicodeGlyphMap` and `FontInfo`
+-- structure.
+makeUnicodeFont :: UnicodeGlyphMap -> UnicodeKernPairs -> FontInfo -> OpentypeFont
+makeUnicodeFont uniGlyphs kernPrs info =
+  OpentypeFont False headTbl hheaTbl cmapTbl
+  nameTbl postTbl (Just os2Tbl) (if null (kernPairs kernTbl) then Nothing else Just kernTbl)
+  (QuadTables emptyMaxpTable glyfTbl) M.empty
+  where
+    (headTbl, hheaTbl, nameTbl, postTbl', os2Tbl) =
+      infoToTables info
+    (cmapTbl, glyfTbl, postTbl, kernTbl) =
+      makeUnicodeTables uniGlyphs kernPrs postTbl'
+  
 
 -- | Given a `UnicodeGlyphMap`, create a `CmapTable`, `GlyfTable` and
 -- `KernTable` and update the `PostTable`.

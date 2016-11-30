@@ -140,7 +140,7 @@ data FontInfo = FontInfo {
   -- this font. /default/: (fontUnitsPerEM/2, fontUnitsPerEM/2)
   fontSuperScriptSize :: Maybe (FWord, FWord),
   -- | The recommended offset in font design units for superscripts for
-  -- this font. /default/: (0, (fontUnitsPerEM-fontEmBase)/2)
+  -- this font. /default/: (cos(90 + italicAngle)*snd superscriptYOffset, (fontUnitsPerEM-fontEmBase)/2)
   fontSuperScriptOffset :: Maybe (FWord, FWord),
   -- | ndicates font embedding licensing rights for the
   -- font. Embeddable fonts may be stored in a document. When a
@@ -150,7 +150,7 @@ data FontInfo = FontInfo {
   -- that system by an embedding-aware application. Embedding
   -- licensing rights are granted by the vendor of the font.
   -- /default/: []
-  fontEmbeddingLicence :: Maybe [EmbedLicence],
+  fontEmbeddingLicence :: [EmbedLicence],
   -- | Width of the strikeout stroke in font design units.  This field
   -- should normally be the width of the em dash for the current
   -- font. If the size is one, the strikeout line will be the line
@@ -175,8 +175,8 @@ data FontInfo = FontInfo {
   -- available. The font class is the most general and the font
   -- subclass is the most specific. The high byte of this field
   -- contains the family class, while the low byte contains the family
-  -- subclass. <https://www.microsoft.com/typography/otspec/ibmfc.htm
-  -- More_information_about_this_field>.
+  -- subclass. See <https://www.microsoft.com/typography/otspec/ibmfc.htm>
+  -- for more information.
   -- /default/: (0,0)
   fontFamilyClass :: Maybe (Int, Int),
   -- | The four character identifier for the vendor of the given type
@@ -271,7 +271,7 @@ data FontInfo = FontInfo {
   fontCopyright :: String,
   -- | Unique font identifier
   fontID :: String,
-  -- | postscriptName.  /default/: full name with '-' substituted for spaces.
+  -- | postscriptName.  /default/: full name with hyphen substituted for spaces.
   fontPsName :: String,
   -- | trademark. /default/: ""
   fontTrademark :: String,
@@ -351,7 +351,7 @@ notRegular reg sub =
 (///) :: Maybe c -> c -> c
 (///) = flip fromMaybe
 
--- | Fill in default fontinfo values
+-- | Fill in font information into the font tables
 infoToTables :: FontInfo -> (HeadTable, HheaTable, NameTable, PostTable, OS2Table)
 infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
   where
@@ -509,21 +509,23 @@ infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
       xAvgCharWidth = 0,
       usWeightClass = weightClass $ fontWeight fi,
       usWidthClass = widthClass $ fontWidth fi,
-      fsType = embeddedBits $ fontEmbeddingLicence fi /// [],
+      fsType = embeddedBits $ fontEmbeddingLicence fi,
       ySubscriptXSize = (fst <$> fontSubScriptSize fi) ///
                         (fontUnitsPerEm fi `quot` 2),
       ySubscriptYSize = (snd <$> fontSubScriptSize fi) ///
                         (fontUnitsPerEm fi `quot` 2),
       ySubscriptXOffset = (fst <$> fontSubScriptOffset fi) /// 0,
       ySubscriptYOffset = (snd <$> fontSubScriptOffset fi) ///
-                          ((fontUnitsPerEm fi - fontEmBase fi) `quot` 2),
+                          (- (fontUnitsPerEm fi `quot` 4)),
       ySuperscriptXSize = (fst <$> fontSuperScriptSize fi) ///
                           (fontUnitsPerEm fi `quot` 2),
       ySuperscriptYSize = (snd <$> fontSuperScriptSize fi) ///
                           (fontUnitsPerEm fi `quot` 2),
-      ySuperscriptXOffset = (fst <$> fontSuperScriptOffset fi) /// 0,
+      ySuperscriptXOffset = (fst <$> fontSuperScriptOffset fi) ///
+                            round (realToFrac (ySubscriptYOffset os2Tbl) *
+                                   cos (pi/180*((fontItalicAngle fi /// 0) + pi/2))),
       ySuperscriptYOffset = (snd <$> fontSuperScriptOffset fi) ///
-                            (- (fontUnitsPerEm fi `quot` 4)),
+                            ((fontUnitsPerEm fi - fontEmBase fi) `quot` 2),
       yStrikeoutSize = fontStrikoutSize fi ///
                        fromIntegral (fontUnitsPerEm fi `quot` 20),
       yStrikeoutPosition = fontStrikeoutPosition fi ///
@@ -554,7 +556,7 @@ infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
       sTypoLineGap = fontLineGap fi,
       usWinAscent = 0,
       usWinDescent = 0,
-      ulCodePageRange1 = (fst <$> fontCodepageRanges fi) /// 0,
+      ulCodePageRange1 = (fst <$> fontCodepageRanges fi) /// 1,
       ulCodePageRange2 = (snd <$> fontCodepageRanges fi) /// 0,
       sxHeight = 0,
       sCapHeight = fontCapHeight fi /// 0,

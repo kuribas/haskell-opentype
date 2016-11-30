@@ -43,6 +43,9 @@ data MaxpTable = MaxpTable {
   maxComponentDepth :: Word16}
   deriving Show
 
+emptyMaxpTable :: MaxpTable
+emptyMaxpTable = MaxpTable 0x00010000 0 0 0 0 0 0 0 0 0 0 0 0 0 0 
+
 putMaxpTable :: MaxpTable -> Put
 putMaxpTable maxp = do
   putWord32be $ maxpVersion maxp

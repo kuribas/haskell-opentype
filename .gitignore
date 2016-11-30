@@ -17,4 +17,5 @@ cabal.sandbox.config
 *~
 *.eventlog
 .stack-work/
+TAGS
 cabal.project.local

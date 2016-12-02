@@ -6,7 +6,6 @@ import Data.Maybe (fromMaybe)
 import Data.Word
 import Control.Monad
 import Data.Binary.Put
-import Data.Tuple (swap)
 import Data.Foldable (for_, traverse_)
 import Data.Traversable (for)
 import qualified Data.HashMap.Strict as HM
@@ -74,11 +73,11 @@ putNameTable (NameTable records_) = do
   where len = length records
         records = sort records_
         (noDups, offsets) = snd $ foldl'
-          (\(offset, (noDups, mp)) r ->
+          (\(offset, (noDups2, mp)) r ->
              if HM.member (nameString r) mp
-             then (offset, (noDups, mp))
+             then (offset, (noDups2, mp))
              else (Strict.length (nameString r) + offset, 
-                    (nameString r:noDups, HM.insert (nameString r) offset mp)))
+                    (nameString r:noDups2, HM.insert (nameString r) offset mp)))
           (0, ([], HM.empty)) records
         
 

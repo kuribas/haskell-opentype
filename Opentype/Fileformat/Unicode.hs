@@ -3,6 +3,7 @@
 module Opentype.Fileformat.Unicode
   (-- * Unicode tables
     UnicodeGlyphMap, UnicodeKernPairs, makeUnicodeTables,
+    makeUnicodeFont, 
     -- * Postscript Names
     module Opentype.Fileformat.Unicode.PostNames,
   )
@@ -46,7 +47,7 @@ makeUnicodeFont uniGlyphs kernPrs info =
 -- `KernTable` and update the `PostTable`.
 makeUnicodeTables :: UnicodeGlyphMap -> UnicodeKernPairs -> PostTable -> (CmapTable, GlyfTable, PostTable, KernTable)
 makeUnicodeTables uniGlyphs kernPrs postTbl =
-  (cmapTbl, GlyfTable glyphVector,
+  (cmapTbl, GlyfTable glyphVec,
    postTbl {postVersion = PostTable2,
             glyphNameIndex = postscriptNameIndex,
             postStrings = postscriptExtraNames},
@@ -78,8 +79,8 @@ makeUnicodeTables uniGlyphs kernPrs postTbl =
       fromMaybe 0 $
       HM.lookup n postscriptNameMap
       <|> postscriptIndex n
-    glyphVector :: V.Vector StandardGlyph
-    glyphVector =
+    glyphVec :: V.Vector StandardGlyph
+    glyphVec =
       V.fromList $
       map (normalizeGlyph.snd.snd) uniqueCodepoints ++
       map (normalizeGlyph.snd) glyphComps

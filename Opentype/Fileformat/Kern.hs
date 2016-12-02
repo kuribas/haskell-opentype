@@ -49,7 +49,7 @@ putKernTable (KernTable _ pairs) = do
   putWord16be 1
   putWord16be 0
   putWord16be $ fromIntegral $ 14+6 * length pairs
-  putWord16be $ fromIntegral 1
+  putWord16be $ 1
   putWord16be $ fromIntegral len
   putWord16be searchRange
   putWord16be entrySelector

@@ -3,7 +3,6 @@ module Opentype.Fileformat.Glyph where
 import Opentype.Fileformat.Types
 import Opentype.Fileformat.Maxp
 import Opentype.Fileformat.Hhea
-import Opentype.Fileformat.Head
 import qualified Data.Vector as V
 import Data.Foldable (traverse_, for_, foldlM)
 import Control.Monad

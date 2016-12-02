@@ -6,7 +6,6 @@ import Data.Char
 import Data.Binary.Put
 import Data.Binary.Get
 import Data.Foldable
-import Data.Traversable
 import Control.Monad (replicateM, replicateM_, when)
 
 data PostVersion =

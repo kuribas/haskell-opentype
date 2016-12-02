@@ -5,14 +5,9 @@ where
 import qualified Data.Map.Strict as M
 import qualified Data.HashMap.Strict as HM
 import Text.Printf
-import qualified Data.Set as S
-import Opentype.Fileformat
 import Data.Tuple (swap)
-import Data.Word
 import qualified Data.Vector as V
 import Data.Char
-import Data.Maybe (fromMaybe)
-import Data.List (isPrefixOf)
 
 type CodePoint = Int
 

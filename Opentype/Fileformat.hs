@@ -1,9 +1,10 @@
-{-# LANGUAGE TupleSections, TemplateHaskell #-}
+{-# LANGUAGE TupleSections, TemplateHaskell, LambdaCase #-}
 
--- | This module provides opentype file loading and writing.  An
--- attempt was made to have a higher level interface without
--- sacrificing features of the file format.
-
+-- | This module provides opentype file loading and writing.  The goal
+-- is to reduce the complexity of the fileformat, without reducing
+-- it's usefullness, or sacrificing features.  A user who just wants
+-- to create a unicode font, and doesn't need the fine control and
+-- legacy features, can use the `Opentype.Fileformat.FontInfo` module.
 module Opentype.Fileformat
        (-- * Types
          ShortFrac (..), Fixed, FWord, UFWord, GlyphID, WordMap, 
@@ -24,7 +25,7 @@ module Opentype.Fileformat
          -- ** Glyf table lenses
          _glyphContours, _glyphInstructions, _glyphComponents,
          -- * CMap table
-         CmapTable(..), CMap(..), PlatformID(..), MapFormat (..),
+         CmapTable(..), CMap(..), Platform(..), MapFormat (..),
          emptyCmapTable, 
          -- * Hhea table
          HheaTable(..),
@@ -155,8 +156,10 @@ getScaledContours font glyph =
 
 getWindowsMap :: OpentypeFont -> Maybe CMap
 getWindowsMap font =
-  find (\cm -> cmapPlatform cm == MicrosoftPlatform &&
-               cmapEncoding cm `elem` [0, 1]) $
+  find (\cm -> case cmapPlatform cm of
+                 MicrosoftPlatform enc ->
+                   enc `elem` [MSSymbol, MSUcs2]
+                 _ -> False) $
   getCmaps $ cmapTable font
   
 getUnicodeChar :: OpentypeFont -> Word32 -> Maybe (Glyph Int)
@@ -185,19 +188,31 @@ writeOTFile font file =
                      yMax = ymax,
                      fontDirectionHint = 2,
                      longLocIndices = format }
-           theAscent | ascent (hheaTable font) == 0 = fromIntegral ymax
-                     | otherwise = ascent (hheaTable font)
-           theDescent | descent (hheaTable font) == 0 = fromIntegral ymin
-                      | otherwise = descent (hheaTable font)
-           theLineGap = case os2Table font of
-             Just os2 -> fromIntegral (unitsPerEm head2) + sTypoLineGap os2 -
-                         ascent hhea2 + descent hhea2
-             Nothing -> lineGap (hheaTable font)
+           theLineGap = lineGap (hheaTable font)
+           (theAscent, theDescent)
+             | (ascent (hheaTable font), 
+                 descent (hheaTable font)) /= (0, 0) =
+               (ascent (hheaTable font),
+                descent (hheaTable font))
+             | Just os2 <- os2Table font,
+               sTypoAscender os2 /= 0 =
+               let b2b = sTypoAscender os2 +
+                         sTypoDescender os2 + sTypoLineGap os2
+               in ( round 
+                    ((realToFrac $ (b2b - theLineGap) * sTypoAscender os2) /
+                     (realToFrac (sTypoAscender os2 + sTypoDescender os2))
+                     :: Double)
+                  , round 
+                    ((realToFrac (b2b - theLineGap) *
+                      realToFrac (sTypoAscender os2) /
+                      realToFrac (sTypoAscender os2 + sTypoDescender os2))
+                    :: Double)
+                  )
+             | otherwise = (ymax, ymin)
            hhea2 = updateHhea glyphs $
                    (hheaTable font) {numOfLongHorMetrics = fromIntegral longHor,
                                      ascent = theAscent,
-                                     descent= theDescent,
-                                     lineGap= theLineGap}
+                                     descent= theDescent}
            maxp2 = updateMaxp glyphs $
                    maxpTbl {maxpVersion = 0x00010000}
            headBs = Lazy.toStrict $ runPut $ putHeadTable head2
@@ -207,25 +222,52 @@ writeOTFile font file =
            nameBs = Lazy.toStrict $ runPut $ putNameTable $ nameTable font
            postBs = Lazy.toStrict $ runPut $ putPostTable $ postTable font
            os2Bs  = (Lazy.toStrict . runPut . putOS2Table .
-                      (\os2 -> os2 {
-                          usWinAscent = fromIntegral theAscent,
-                          usWinDescent = fromIntegral $ -theDescent,
+                      (\os2 ->
+                         os2 {
+                          -- usWinAscent = 
+                          --     if usWinAscent os2 /= 0
+                          --     then usWinAscent os2
+                          --     else round $
+                          --          b2b * sTypoAscender os2 /
+                          --          (sTypoAscender os2 + sTypoDescender os2),
+                          -- usWinDescent =
+                          --     if usWinDescent os2 /= 0
+                          --     then usWinDescent os2
+                          --     else round $
+                          --          b2b * sTypoDescender os2 /
+                          --          (sTypoAscender os2 + sTypoDescender os2),
+                          -- sTypoAscender =
+                          --     if sTypoAscender os2 /= 0
+                          --     then sTypoAscender os2
+                          --     else round $
+                          --          (fromIntegral (unitsPerEm head2)) *
+                          --          ((fromIntegral theAscent :: Double) /
+                          --           fromIntegral (theAscent - theDescent)),
+                          -- sTypoDescender =
+                          --     if sTypoDescender os2 /= 0
+                          --     then sTypoDescender os2
+                          --     else round $
+                          --          (fromIntegral (unitsPerEm head2)) *
+                          --          ((- fromIntegral theDescent :: Double) /
+                          --            fromIntegral (theAscent - theDescent)),
                           usFirstCharIndex = fromMaybe 0 $ do
                               mp <- getWindowsMap font
-                              Just $ fromIntegral $ fst $ M.findMin $ glyphMap mp,
+                              Just $ fromIntegral $ fst $
+                                M.findMin $ glyphMap mp,
                           usLastCharIndex = fromMaybe 0xffff $ do
                               mp <- getWindowsMap font
                               let l = fst $ M.findMax $ glyphMap mp
-                              if l > 0xffff then Nothing else Just $ fromIntegral l,
+                              if l > 0xffff then Nothing
+                                else Just $ fromIntegral l,
                           sxHeight =
                               if sxHeight os2 == 0
-                              then fromMaybe 0 $
-                                   glyphYmax <$> getUnicodeChar font 0x0078
+                              then maybe 0 glyphYmax $
+                                   getUnicodeChar font 0x0078
                               else sxHeight os2,
                           sCapHeight =
                               if sCapHeight os2 == 0
-                              then fromMaybe 0 $
-                                   glyphYmax <$> getUnicodeChar font 0x0048
+                              then maybe 0 glyphYmax $
+                                   getUnicodeChar font 0x0048
                               else sCapHeight os2}))
                     <$> os2Table font
            kernBs = (Lazy.toStrict . runPut . putKernTable) <$> kernTable font
@@ -314,7 +356,8 @@ readTables = do
 checkSum :: Strict.ByteString -> Word32
 checkSum bs
   | Strict.length bs < 4 =
-      sum [fromIntegral n `shift` l  | (n, l) <- zip (Strict.unpack bs) [24, 16, 8, 0]]
+      sum [fromIntegral n `shift` l  |
+           (n, l) <- zip (Strict.unpack bs) [24, 16, 8, 0]]
   | otherwise =
       fromIntegral (unsafeIndex bs 0) `shift` 24 +
       fromIntegral (unsafeIndex bs 1) `shift` 16 +

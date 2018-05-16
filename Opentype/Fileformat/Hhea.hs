@@ -9,21 +9,24 @@ import Control.Monad
 
 -- | This table contains information for horizontal layout. 
 data HheaTable = HheaTable {
-  -- | 0x00010000 (1.0), will be overwritten.
+  -- | 0x00010000 (1.0), Will be overwritten with the correct value.
   version :: Fixed,
-  -- | Distance from baseline of highest ascender.  /Will be overwritten./
+  -- | Distance from baseline of highest ascender.  If zero this will
+  -- be calculated from the glyphs.
   ascent :: FWord,
-  -- | Distance from baseline of lowest descender.  /Will be overwritten./
+  -- | Distance from baseline of lowest descender.  If zero this will
+  -- be calculated from the glyphs.
   descent :: FWord,
-  -- | typographic line gap.  Will be overwritten when OS/2 table is present.
+  -- | typographic line gap.  If zero this will be calculated from the
+  -- OS/2 table if present.
   lineGap :: FWord,
-  -- | /Will be overwritten./
+  -- | /Will be overwritten with the correct value./
   advanceWidthMax :: UFWord,
-  -- | /Will be overwritten./
+  -- | /Will be overwritten with the correct value./
   minLeftSideBearing :: FWord,
-  -- | /Will be overwritten./
+  -- | /Will be overwritten with the correct value./
   minRightSideBearing :: FWord,
-  -- | /Will be overwritten./
+  -- | /Will be overwritten with the correct value./
   xMaxExtent :: FWord,
   -- | used to calculate the slope of the caret (rise/run) set to 1 for vertical caret
   caretSlopeRise :: Int16,
@@ -31,7 +34,7 @@ data HheaTable = HheaTable {
   caretSlopeRun :: Int16,
   -- | set value to 0 for non-slanted fonts
   caretOffset :: FWord,
-  -- | number of advance widths in metrics table. /Will be overwritten./
+  -- | number of advance widths in metrics table. /Will be overwritten with the correct value./
   numOfLongHorMetrics :: Word16}
   deriving Show
 

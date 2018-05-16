@@ -11,17 +11,17 @@ import Data.Word
 -- aren't yet supported.  __Note:__ The cff version of this table will
 -- be handled automatically.
 data MaxpTable = MaxpTable {
-  -- | 0x00010000 (1.0).  /Will be auto written./ 
+  -- | 0x00010000 (1.0).  /Will be overwritten with the correct value./ 
   maxpVersion :: Fixed,
-  -- | the number of glyphs in the font.  /Will be auto written./
+  -- | the number of glyphs in the font.  /Will be overwritten with the correct value./
   numGlyphs :: Word16,
-  -- | points in non-compound glyph.  /Will be auto written./
+  -- | points in non-compound glyph.  /Will be overwritten with the correct value./
   maxPoints :: Word16,
-  -- | contours in non-compound glyph.  /Will be auto written./
+  -- | contours in non-compound glyph.  /Will be overwritten with the correct value./
   maxContours :: Word16,
-  -- | points in compound glyph.  /Will be auto written./
+  -- | points in compound glyph.  /Will be overwritten with the correct value./
   maxComponentPoints :: Word16,
-  -- | contours in compound glyph. /Will be auto written./
+  -- | contours in compound glyph. /Will be overwritten with the correct value./
   maxComponentContours :: Word16,
   -- | set to 2
   maxZones :: Word16,
@@ -37,9 +37,9 @@ data MaxpTable = MaxpTable {
   maxStackElements :: Word16,
   -- | byte count for glyph instructions
   maxSizeOfInstructions :: Word16,
-  -- | number of glyphs referenced at top level. /Will be auto written./
+  -- | number of glyphs referenced at top level. /Will be overwritten with the correct value./
   maxComponentElements :: Word16,
-  -- | levels of recursion.  /Will be auto written./
+  -- | levels of recursion.  /Will be overwritten with the correct value./
   maxComponentDepth :: Word16}
   deriving Show
 

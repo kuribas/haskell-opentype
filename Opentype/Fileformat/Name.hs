@@ -32,38 +32,41 @@ import qualified Data.ByteString as Strict
 -- 5) follows the guidelines given in the opentype specification.
 --
 -- The encoding for each bytestring depends on the PlatformID and
--- encodingID.  This library doesn't do any conversion.  For more
--- information see the opentype specification:
+-- encodingID.  This library doesn't do any conversion for non unicode
+-- types.  For more information see the opentype specification:
 -- https://www.microsoft.com/typography/otspec/name.htm
 data NameTable = NameTable {nameRecords :: [NameRecord]}
   deriving Show
 
 data NameRecord = NameRecord {
-  namePlatform :: PlatformID,
-  nameEncoding :: Word16,
+  namePlatform :: Platform,
   nameLanguage :: Word16,
   nameID :: Word16,
-  nameString :: Strict.ByteString}
+  nameString :: RecordString}
   deriving Show
 
+data RecordString =
+  LegacyString Strict.ByteString |
+  UnicodeString String
+  deriving (Show)
+
 instance Ord NameRecord where
-  compare (NameRecord pID eID lang nID _)
-    (NameRecord pID2 eID2 lang2 nID2 _) =
-    compare (pID, eID, lang, nID) (pID2, eID2, lang2, nID2)
+  compare (NameRecord p lang nID _)
+    (NameRecord p2 lang2 nID2 _) =
+    compare (p, lang, nID) (p2, lang2, nID2)
 
 instance Eq NameRecord where
-  (NameRecord pID eID lang nID _) ==
-    (NameRecord pID2 eID2 lang2 nID2 _) =
-    (pID, eID, lang, nID) == (pID2, eID2, lang2, nID2)    
+  (NameRecord p lang nID _) ==
+    (NameRecord p2 lang2 nID2 _) =
+    (p, lang, nID) == (p2, lang2, nID2)    
 
 putNameTable :: NameTable -> Put
 putNameTable (NameTable records_) = do
   putWord16be 0
   putWord16be $ fromIntegral len
   putWord16be $ fromIntegral $ len * 12 + 6
-  for_ records $ \r -> do
+    for_ records $ \r -> do
     putPf $ namePlatform r
-    putWord16be $ nameEncoding r
     putWord16be $ nameLanguage r
     putWord16be $ nameID r
     putWord16be $ fromIntegral $ Strict.length $ nameString r
@@ -88,13 +91,14 @@ readNameTable bs = do
   len <- index16 bs 1 
   storage <- index16 bs 2
   records <- for [0..len-1] $ \i -> do
-    pf <- toPf =<< index16 bs (3 + i*6)
-    enc <- index16 bs $ 3 + i*6 + 1
+    pf <- join $ liftM2 toPf
+      (index16 bs (3 + i*6))
+      (index16 bs $ 3 + i*6 + 1)
     lang <- index16 bs $ 3 + i*6 + 2
     nID <- index16 bs $ 3 + i*6 + 3
     len2 <- index16 bs $ 3 + i*6 + 4 
     offset <- index16 bs $ 3 + i*6 + 5
-    Right (offset, len2, NameRecord pf enc lang nID)
+    Right (offset, len2, NameRecord pf lang nID)
   records2 <- for records $
     \(offset, len2, r) ->
       if storage+offset+len2 > fromIntegral (Strict.length bs)

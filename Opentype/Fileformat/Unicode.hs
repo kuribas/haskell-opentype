@@ -58,12 +58,13 @@ makeUnicodeTables uniGlyphs kernPrs postTbl =
     uniqueCodepoints =
       filter (\(s, (_, g)) -> glyphName g == s)
       codepoints
-    (codepoints, glyphComps) =
+    glyphComps = filter (\(s, g) -> glyphName g == s) glyphComps_
+    (codepoints, glyphComps_) =
       partitionEithers $ map getCodePoint $
       HM.toList uniGlyphs
     nameMap :: HM.HashMap String GlyphID
     nameMap =
-      HM.fromList $ flip zip [1..] $
+      HM.fromList $ flip zip [0..] $
       map fst (sortBy (compare `on` (fst.snd)) uniqueCodepoints)
       ++ map fst glyphComps
     postscriptNameMap :: HM.HashMap String Int

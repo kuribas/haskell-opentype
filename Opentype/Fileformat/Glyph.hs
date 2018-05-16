@@ -41,13 +41,13 @@ data Glyph a = Glyph {
   glyphName :: String,
   advanceWidth :: Word16,
   leftSideBearing :: Int16,
-  -- | Bounding box: /will be overwritten/
+  -- | Bounding box: /Will be overwritten with the correct value./
   glyphXmin :: FWord,
-  -- | Bounding box: /will be overwritten/
+  -- | Bounding box: /Will be overwritten with the correct value./
   glyphYmin :: FWord,
-  -- | Bounding box: /will be overwritten/
+  -- | Bounding box: /Will be overwritten with the correct value./
   glyphXmax :: FWord,
-  -- | Bounding box: /will be overwritten/
+  -- | Bounding box: /Will be overwritten with the correct value./
   glyphYmax :: FWord,
   glyphOutlines :: GlyphOutlines a}
   deriving (Show, Functor, Foldable, Traversable)

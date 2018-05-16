@@ -1,9 +1,8 @@
--- | This module implements a somewhat more logical structure
--- containing font information, without the need for an in-depth study
--- of the opentype spec.
-module Opentype.Fileformat.FontInfo (FontInfo(..), Weight(..),
+-- | This module imphttps://boardgamegeek.com/article/11093456#11093456lements an easier way to create unicode fonts,
+-- and doesn't require an in-depth study of the spec.
+module Opentype.Fileformat.FontInfo (FontInfo, fontInfo, FontInfoOption, Weight(..),
                                      Width(..), Slant(..), Decoration(..),
-                                     EmbedLicence(..), infoToTables)
+                                     EmbedLicence(..), infoToTables, infoDefault)
 where
 import Opentype.Fileformat
 import Opentype.Fileformat.Types
@@ -96,6 +95,16 @@ licenceBit OnlyBitmapEmbed = 0x0200
 embeddedBits :: [EmbedLicence] -> Word16
 embeddedBits = fromIntegral . sum . map licenceBit
 
+defaultFontInfoOptions :: FontInfoOptions
+defaultFontInfoOptions =
+  FontInfoOptions fam vs upm fbase lg
+  NormalWeight MediumWidth NoSlant Nothing Nothing
+  Nothing Nothing Nothing Nothing Nothing Nothing
+  [] Nothing Nothing Nothing Nothing Nothing
+  Nothing Nothing Nothing Nothing Nothing Nothing
+  Nothing Nothing "" [] "" "" "" "" "" "" "" "" "" ""
+  "" "" "" "" tm Nothing
+
 -- |  Currently only english strings are supported.
 data FontInfo = FontInfo {
   -- | Font Family name, without subfamily classifiers such as /Bold/, /Italic/, etc...
@@ -106,12 +115,22 @@ data FontInfo = FontInfo {
   -- | Number of units in an em-square.  Should be a power of 2.
   -- Typical values are 1024 or 2048.
   fontUnitsPerEm :: FWord,
-  -- | Distance between the bottom of the em-square and the baseline
-  -- in font design units.
-  fontEmBase :: FWord,
-  -- | Linegap in font design units.  Defined as distance between
-  -- baselines - height of em square (`fontUnitsPerEm`).
-  fontLineGap :: FWord,
+  -- | Optional values
+  fontInfoOptions :: FontInfoOptions }
+
+-- FontInfo Options with defaults.  A value of `Nothing` means calculate based on other values.
+data FontInfoOptions = FOntInfoOptions
+  -- | Baseline to baseline distance.  Default: 1.2 * fontUnitsPerEm.
+  fontBaselineDist :: Maybe FWord,  
+  -- | Ascender in units. Should be as least as big as the longest
+  -- glyph in the font.  The strategy used to calculate the values is
+  -- based on /Webfont/:
+  -- https://www.glyphsapp.com/tutorials/vertical-metrics.  Default:
+  -- maximum glyph ascender.
+  fontAscender :: Maybe FWord,
+  -- | Descender in units.  Should be equal to or bigger than the
+  -- descender of the lowest glyph.  Default: maximum glyph descender.
+  fontDescender :: Maybe FWord,
   -- | Weight of the font.  /default/: `NormalWeight`
   fontWeight :: Weight,
   -- | Width of the font.  /default/: `MediumWidth`
@@ -119,28 +138,28 @@ data FontInfo = FontInfo {
   -- | Slant of the font.  /default/: `NoSlant`
   fontSlant :: Slant,
   -- | fixed width font.  /default/: False
-  fontMonospaced :: Maybe Bool,
-  -- | Smallest readable size in pixels.  /default/: 6
-  fontLowestRecPPEM :: Maybe Int,
+  fontMonospaced :: Bool,
+  -- | Smallest readable size in pixels.  /default/: 15
+  fontLowestRecPPEM :: Int,
   -- | talic angle in counter-clockwise degrees from the
   -- vertical. Zero for upright text, negative for text that leans to
   -- the right (forward).  /default/: 0
-  fontItalicAngle :: Maybe Double,
+  fontItalicAngle_ :: Double,
   -- | The amount by which a slanted highlight on a glyph needs to be
   -- shifted to produce the best appearance. /default/: 0
-  fontCaretOffset :: Maybe FWord,
+  fontCaretOffset_ :: FWord,
   -- | The recommended size in font design units for subscripts for
   -- this font. /default/: (fontUnitsPerEM/2, fontUnitsPerEM/2)
-  fontSubScriptSize :: Maybe (FWord, FWord),
+  fontSubScriptSize_ :: Maybe (FWord, FWord),
   -- | The recommended offset in font design units for subscripts for
   -- this font. /default/: (0, -fontUnitsPerEM/4)
-  fontSubScriptOffset :: Maybe (FWord, FWord),
+  fontSubScriptOffset_ :: Maybe (FWord, FWord),
   -- | The recommended size in font design units for superscripts for
   -- this font. /default/: (fontUnitsPerEM/2, fontUnitsPerEM/2)
-  fontSuperScriptSize :: Maybe (FWord, FWord),
+  fontSuperScriptSize_ :: Maybe (FWord, FWord),
   -- | The recommended offset in font design units for superscripts for
   -- this font. /default/: (cos(90 + italicAngle)*snd superscriptYOffset, (fontUnitsPerEM-fontEmBase)/2)
-  fontSuperScriptOffset :: Maybe (FWord, FWord),
+  fontSuperScriptOffset_ :: Maybe (FWord, FWord),
   -- | ndicates font embedding licensing rights for the
   -- font. Embeddable fonts may be stored in a document. When a
   -- document with embedded fonts is opened on a system that does not
@@ -149,7 +168,7 @@ data FontInfo = FontInfo {
   -- that system by an embedding-aware application. Embedding
   -- licensing rights are granted by the vendor of the font.
   -- /default/: []
-  fontEmbeddingLicence :: [EmbedLicence],
+  fontEmbeddingLicence_ :: [EmbedLicence],
   -- | Width of the strikeout stroke in font design units.  This field
   -- should normally be the width of the em dash for the current
   -- font. If the size is one, the strikeout line will be the line
@@ -157,7 +176,7 @@ data FontInfo = FontInfo {
   -- the strikeout line will be the line represented by the strikeout
   -- position and the line immediately above the strikeout
   -- position. /default/: fontUnitsPerEm/20 
-  fontStrikoutSize :: Maybe FWord,
+  fontStrikoutSize_ :: Maybe FWord,
   -- | The position of the top of the strikeout stroke relative to the
   -- baseline in font design units.  Positive values represent
   -- distances above the baseline, while negative values represent
@@ -167,7 +186,7 @@ data FontInfo = FontInfo {
   -- with the recognition of standard characters, and therefore should
   -- not line up with crossbars in the
   -- font. /default/. fontUnitsPerEm/5.5
-  fontStrikeoutPosition :: Maybe FWord,
+  fontStrikeoutPosition_ :: Maybe FWord,
   -- | The font class and font subclass are registered values assigned
   -- by IBM to each font family. This parameter is intended for use in
   -- selecting an alternate font when the requested font is not
@@ -177,7 +196,7 @@ data FontInfo = FontInfo {
   -- subclass. See <https://www.microsoft.com/typography/otspec/ibmfc.htm>
   -- for more information.
   -- /default/: (0,0)
-  fontFamilyClass :: Maybe (Int, Int),
+  fontFamilyClass_ :: (Int, Int),
   -- | The four character identifier for the vendor of the given type
   -- face. This is not the royalty owner of the original artwork. This
   -- is the company responsible for the marketing and distribution of
@@ -190,17 +209,17 @@ data FontInfo = FontInfo {
   -- to be used over another, possibly inferior, font file. The Vendor
   -- ID value is not required.
   -- /default/: (' ', ' ', ' ', ' ')
-  fontVendorID :: Maybe (Char, Char, Char, Char),
+  fontVendorID :: (Char, Char, Char, Char),
   -- | Panose-1 Classification.  /default/: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-  fontPanose :: Maybe (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int),
+  fontPanose :: (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int),
   -- | Supported Unicode Ranges: See
   -- https://www.microsoft.com/typography/otspec/os2.htm#ur.
   -- /default/ (3, 0, 0, 0)
-  fontUnicodeRanges :: Maybe (Word32, Word32, Word32, Word32),
+  fontUnicodeRanges :: (Word32, Word32, Word32, Word32),
   -- | Supported Codepage Ranges. See
   -- https://www.microsoft.com/typography/otspec/os2.htm#cpr.
   -- /default/: (1, 0)
-  fontCodepageRanges :: Maybe (Word32, Word32),
+  fontCodepageRanges :: (Word32, Word32),
   -- | This metric specifies the distance between the baseline and the
   -- approximate height of non-ascending lowercase letters measured in
   -- FUnits.  /default/ height of glyph at U+0078 (LATIN SMALL LETTER
@@ -228,7 +247,7 @@ data FontInfo = FontInfo {
   -- ranges. usLowerOpticalPointSize must be less than
   -- usUpperOpticalPointSize. The maximum valid value is 0xFFFE.
   -- /default/: 0
-  fontLowerOpticalPointSize :: Maybe Int,
+  fontLowerOpticalPointSize :: Int,
   -- | fontUpperOptThis field is used for fonts with multiple optical styles.
   --
   -- This value is the upper value of the size range for which this
@@ -249,7 +268,7 @@ data FontInfo = FontInfo {
   -- is 2 (two). The largest possible inclusive point size represented
   -- by this field is 3276.65 points, any higher values would be
   -- represented as infinity.  /default/: 0xffff
-  fontUpperOpticalPointSize :: Maybe Int,
+  fontUpperOpticalPointSize :: Int,
   -- | This is the suggested distance of the top of the underline from
   -- the baseline (negative values indicate below baseline).  The
   -- PostScript definition of this FontInfo dictionary key (the y
@@ -352,12 +371,12 @@ notRegular reg sub =
 
 -- | Fill in font information into the font tables
 infoToTables :: FontInfo -> (HeadTable, HheaTable, NameTable, PostTable, OS2Table)
-infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
+infoToTables (FontInfo family version unitsPerEm options) = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
   where
     headTbl = HeadTable {
       headVersion = 0x00010000,
       fontRevision = fromIntegral $ 
-                     fromIntegral (fontVersion fi) * 0x00010000 `quot`
+                     fromIntegral (version) * 0x00010000 `quot`
                      (1000 :: Integer),
       baselineYZero = True,
       sidebearingXZero = True,
@@ -373,38 +392,38 @@ infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
       convertedFont = False,
       clearTypeOptimized = False,
       lastResortFont = False,
-      unitsPerEm = fromIntegral $ fontUnitsPerEm fi,
-      created = fontCreated fi,
-      modified = fontModified fi /// fontCreated fi,
+      unitsPerEm = fromIntegral unitsPerEm,
+      created = fontCreated options,
+      modified = fontModified options /// fontCreated options,
       xMin = 0,
       yMin = 0,
       xMax = 0,
       yMax = 0,
-      boldStyle = fontWeight fi > NormalWeight,
-      italicStyle = fontSlant fi == Italic,
-      underlineStyle = Underscore `elem` fontDecoration fi,
-      outlineStyle = Outlined `elem` fontDecoration fi,
-      shadowStyle = Shadow `elem` fontDecoration fi,
-      condensedStyle = fontWidth fi < MediumWidth,
-      extendedStyle = fontWidth fi > MediumWidth,
-      lowerRecPPEM = (fromIntegral <$> fontLowestRecPPEM fi) /// 6,
+      boldStyle = fontWeight options > NormalWeight,
+      italicStyle = fontSlant options == Italic,
+      underlineStyle = Underscore `elem` fontDecoration options,
+      outlineStyle = Outlined `elem` fontDecoration options,
+      shadowStyle = Shadow `elem` fontDecoration options,
+      condensedStyle = fontWidth options < MediumWidth,
+      extendedStyle = fontWidth options > MediumWidth,
+      lowerRecPPEM = (fromIntegral <$> fontLowestRecPPEM options) /// 15,
       fontDirectionHint = 2,
       longLocIndices = False,
       glyphDataFormat = 0}
     hheaTbl = HheaTable {
       version = 0x00010000,
-      ascent = 0,
-      descent = 0,
-      lineGap = 0,
+      ascent = fontAscender fi /// 0,
+      descent = fontDescender fi /// 0,
+      lineGap = 0,  -- will be calculated in writeOTFile from os2 fields.
       advanceWidthMax = 0,
       minLeftSideBearing = 0,
       minRightSideBearing = 0,
       xMaxExtent = 0,
-      caretSlopeRise = case fontItalicAngle fi /// 0 of
+      caretSlopeRise = case fontItalicAngle options /// 0 of
           0 -> 1
           -90 -> 0
           a -> round $ cos (pi*a/180 + pi/2) * 2048,
-      caretSlopeRun = case fontItalicAngle fi /// 0 of
+      caretSlopeRun = case fontItalicAngle options /// 0 of
           0 -> 0
           -90 -> 1
           a -> round $ sin (pi*a/180 + pi/2) * 2048,
@@ -416,65 +435,65 @@ infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
        Strict.pack $ map (fromIntegral . (.&.0xff) . ord) ns,
        NameRecord MicrosoftPlatform 1 0x0409 nid $
        Lazy.toStrict $ runPut (traverse_ (putWord16be . fromIntegral . ord) ns)]
-    (versionMajor, versionMinor) = fontVersion fi `quotRem` 1000
+    (versionMajor, versionMinor) = fontVersion options `quotRem` 1000
     fullName = fontFamily fi +++ subFamily
     subFamily = fontSubFamilyExtra fi +++
                 notRegular NormalWeight (fontWeight fi) +++
                 notRegular MediumWidth (fontWidth fi) +++
-                notRegular NoSlant (fontSlant fi)
+                notRegular NoSlant (fontSlant options)
     wsSubFamily
-      | fontWeight fi == NormalWeight && fontSlant fi == NoSlant
+      | fontWeight options == NormalWeight && fontSlant options == NoSlant
       = "Regular"
-      | otherwise = weightName +++ notRegular NoSlant (fontSlant fi)
+      | otherwise = weightName +++ notRegular NoSlant (fontSlant options)
       where
         weightName
-          | fontWeight fi < NormalWeight = "Thin"
-          | fontWeight fi > NormalWeight = "Bold"
+          | fontWeight options < NormalWeight = "Thin"
+          | fontWeight options > NormalWeight = "Bold"
           | otherwise = ""
 
     nameTbl = NameTable $
         concat [
-          mkNameRecords 0 $ fontCopyright fi,
+          mkNameRecords 0 $ fontCopyright options,
           mkNameRecords 1 $ fontFamily fi +++ fontSubFamilyExtra fi +++
-            notRegular MediumWidth (fontWidth fi),
+            notRegular MediumWidth (fontWidth options),
           mkNameRecords 2 wsSubFamily,
-          mkNameRecords 3 $ fontID fi,
+          mkNameRecords 3 $ fontID options,
           mkNameRecords 4 fullName,
           mkNameRecords 5 $ printf "Version %d.%03d" versionMajor versionMinor,
-          mkNameRecords 6 $ if null (fontPsName fi)
+          mkNameRecords 6 $ if null (fontPsName options)
             then take 63 $ map (\c -> if c == ' ' then '-' else c) fullName
-            else fontPsName fi,
-          mkNameRecords 7 $ fontTrademark fi,
-          mkNameRecords 8 $ fontManufacturer fi,
-          mkNameRecords 9 $ fontDesigner fi,
-          mkNameRecords 10 $ fontDescription fi,
-          mkNameRecords 11 $ fontVendorUrl fi,
-          mkNameRecords 12 $ fontDesignerUrl fi,
-          mkNameRecords 13 $ fontLicence fi,
-          mkNameRecords 14 $ fontLicenceUrl fi,
-          mkNameRecords 16 $ fontFamily fi,
+            else fontPsName options,
+          mkNameRecords 7 $ fontTrademark options,
+          mkNameRecords 8 $ fontManufacturer options,
+          mkNameRecords 9 $ fontDesigner options,
+          mkNameRecords 10 $ fontDescription options,
+          mkNameRecords 11 $ fontVendorUrl options,
+          mkNameRecords 12 $ fontDesignerUrl options,
+          mkNameRecords 13 $ fontLicence options,
+          mkNameRecords 14 $ fontLicenceUrl options,
+          mkNameRecords 16 $ fontFamily options,
           mkNameRecords 17 subFamily,
-          mkNameRecords 19 $ fontSampleText fi,
+          mkNameRecords 19 $ fontSampleText options,
           mkNameRecords 21 $
-            if null (fontSubFamilyExtra fi) then ""
-            else fontFamily fi +++ fontSubFamilyExtra fi,
+            if null (fontSubFamilyExtra options) then ""
+            else fontFamily options +++ fontSubFamilyExtra options,
           mkNameRecords 22 $
-            if null (fontSubFamilyExtra fi) then ""
-            else notRegular NormalWeight (fontWeight fi) +++
-                 notRegular MediumWidth (fontWidth fi) +++
-                 notRegular NoSlant (fontSlant fi),
-          mkNameRecords 23 $ fontLightPalette fi,
-          mkNameRecords 24 $ fontDarkPalette fi]
+            if null (fontSubFamilyExtra options) then ""
+            else notRegular NormalWeight (fontWeight options) +++
+                 notRegular MediumWidth (fontWidth options) +++
+                 notRegular NoSlant (fontSlant options),
+          mkNameRecords 23 $ fontLightPalette options,
+          mkNameRecords 24 $ fontDarkPalette options]
     postTbl = PostTable {
       postVersion = PostTable2,
-      italicAngle = round $ (fontItalicAngle fi /// 0)
+      italicAngle = round $ (fontItalicAngle options /// 0)
                     * 0x00010000,
-      underlinePosition = fontUnderlinePosition fi ///
-                          (- fromIntegral (fontUnitsPerEm fi `quot` 8)),
-      underlineThickness = fontUnderlineThickness fi ///
-                           fromIntegral (fontUnitsPerEm fi `quot` 10),
+      underlinePosition = fontUnderlinePosition options ///
+                          (- fromIntegral (fontUnitsPerEm options `quot` 8)),
+      underlineThickness = fontUnderlineThickness options ///
+                           fromIntegral (fontUnitsPerEm options `quot` 10),
       isFixedPitch = fromIntegral $ fromEnum $
-                     fontMonospaced fi /// False,
+                     fontMonospaced options /// False,
       minMemType42 = 0,
       maxMemType42 = 0,
       minMemType1 = 0,
@@ -483,54 +502,54 @@ infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
       postStrings = []}
     (panose1, panose2, panose3, panose4, panose5,
      panose6, panose7, panose8, panose9, panose10) =
-      fontPanose fi /// (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    vendorID = case fontVendorID fi of
+      fontPanose options /// (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    vendorID = case fontVendorID options of
       Nothing -> 0x20202020
       Just (a, b, c, d) -> fromIntegral $
         ord a `shift` 24 .|. ord b `shift` 16 .|.
         ord c `shift` 8  .|. ord d
     selectionFlags = makeFlag
-      [fontSlant fi == Italic,
-       Underscore `elem` fontDecoration fi,
-       Negative `elem` fontDecoration fi,
-       Outlined `elem` fontDecoration fi,
-       StrikeOut `elem` fontDecoration fi,
-       fontWeight fi > NormalWeight,
-       fontWeight fi == NormalWeight &&
-       fontWidth fi == MediumWidth &&
-       fontSlant fi == NoSlant &&
-       null (fontSubFamilyExtra fi),
+      [fontSlant options == Italic,
+       Underscore `elem` fontDecoration options,
+       Negative `elem` fontDecoration options,
+       Outlined `elem` fontDecoration options,
+       StrikeOut `elem` fontDecoration options,
+       fontWeight options > NormalWeight,
+       fontWeight options == NormalWeight &&
+       fontWidth options == MediumWidth &&
+       fontSlant options == NoSlant &&
+       null (fontSubFamilyExtra options),
        True,
-       null (fontSubFamilyExtra fi),
-       fontSlant fi == Oblique]
+       null (fontSubFamilyExtra options),
+       fontSlant options == Oblique]
     os2Tbl = OS2Table {
       os2version = 5,
       xAvgCharWidth = 0,
-      usWeightClass = weightClass $ fontWeight fi,
-      usWidthClass = widthClass $ fontWidth fi,
-      fsType = embeddedBits $ fontEmbeddingLicence fi,
+      usWeightClass = weightClass $ fontWeight options,
+      usWidthClass = widthClass $ fontWidth options,
+      fsType = embeddedBits $ fontEmbeddingLicence options,
       ySubscriptXSize = (fst <$> fontSubScriptSize fi) ///
-                        (fontUnitsPerEm fi `quot` 2),
-      ySubscriptYSize = (snd <$> fontSubScriptSize fi) ///
-                        (fontUnitsPerEm fi `quot` 2),
+                        (fontUnitsPerEm options `quot` 2),
+      ySubscriptYSize = (snd <$> fontSubScriptSize options) ///
+                        (fontUnitsPerEm options `quot` 2),
       ySubscriptXOffset = (fst <$> fontSubScriptOffset fi) /// 0,
       ySubscriptYOffset = (snd <$> fontSubScriptOffset fi) ///
-                          (- (fontUnitsPerEm fi `quot` 4)),
-      ySuperscriptXSize = (fst <$> fontSuperScriptSize fi) ///
-                          (fontUnitsPerEm fi `quot` 2),
-      ySuperscriptYSize = (snd <$> fontSuperScriptSize fi) ///
-                          (fontUnitsPerEm fi `quot` 2),
+                          (- (fontUnitsPerEm options `quot` 4)),
+      ySuperscriptXSize = (fst <$> fontSuperScriptSize options) ///
+                          (fontUnitsPerEm options `quot` 2),
+      ySuperscriptYSize = (snd <$> fontSuperScriptSize options) ///
+                          (fontUnitsPerEm options `quot` 2),
       ySuperscriptXOffset = (fst <$> fontSuperScriptOffset fi) ///
                             round (realToFrac (ySubscriptYOffset os2Tbl) *
-                                   cos (pi/180*((fontItalicAngle fi /// 0) + pi/2))),
+                                   cos (pi/180*((fontItalicAngle options /// 0) + pi/2))),
       ySuperscriptYOffset = (snd <$> fontSuperScriptOffset fi) ///
-                            ((fontUnitsPerEm fi - fontEmBase fi) `quot` 2),
-      yStrikeoutSize = fontStrikoutSize fi ///
-                       fromIntegral (fontUnitsPerEm fi `quot` 20),
-      yStrikeoutPosition = fontStrikeoutPosition fi ///
-                           fromIntegral (fontUnitsPerEm fi*10 `quot` 55),
+                            ((fontUnitsPerEm options - fontEmBase options) `quot` 2),
+      yStrikeoutSize = fontStrikoutSize options ///
+                       fromIntegral (fontUnitsPerEm options `quot` 20),
+      yStrikeoutPosition = fontStrikeoutPosition options ///
+                           fromIntegral (fontUnitsPerEm options*10 `quot` 55),
       bFamilyClass = fromIntegral $
-                     ((\(x,y) -> (x `shift` 8 .|. y)) <$> fontFamilyClass fi)
+                     ((\(x,y) -> (x `shift` 8 .|. y)) <$> fontFamilyClass options)
                      /// 0,
       bFamilyType = fromIntegral panose1,
       bSerifStyle = fromIntegral panose2,
@@ -550,18 +569,20 @@ infoToTables fi = (headTbl, hheaTbl, nameTbl, postTbl, os2Tbl)
       fsSelection = selectionFlags,
       usFirstCharIndex = 0,
       usLastCharIndex = 0,
-      sTypoAscender = fontUnitsPerEm fi - fontEmBase fi,
-      sTypoDescender = fromIntegral $ - fontEmBase fi,
-      sTypoLineGap = fontLineGap fi,
-      usWinAscent = 0,
-      usWinDescent = 0,
+      sTypoAscender = 0, -- will be calculated in writeOTFile
+      sTypoDescender = 0, -- will be calculated in writeOTFile
+      sTypoLineGap = case fontBaselineDist options of
+          Just b -> b - fontUnitsPerEm options
+          Nothing -> fontUnitsPerEm options `div` 5
+      usWinAscent = 0, -- will be calculated in writeOTFile
+      usWinDescent = 0, -- will be calculated in writeOTFile
       ulCodePageRange1 = (fst <$> fontCodepageRanges fi) /// 1,
       ulCodePageRange2 = (snd <$> fontCodepageRanges fi) /// 0,
       sxHeight = 0,
       sCapHeight = fontCapHeight fi /// 0,
       usDefaultChar = 0,
-      usBreakChar = 0,
-      usMaxContext = 1,
+      usBreakChar = 0x20,
+      usMaxContext = 0,
       usLowerOpticalPointSize = fromIntegral $
         fontLowerOpticalPointSize fi /// 0,
       usUpperOpticalPointSize = fromIntegral $

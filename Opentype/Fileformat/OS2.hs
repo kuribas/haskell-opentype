@@ -44,10 +44,14 @@ data OS2Table = OS2Table {
   fsSelection :: Word16,
   usFirstCharIndex :: Word16,
   usLastCharIndex :: Word16,
+  -- | if zero, will be calculated from hhea metrics.
   sTypoAscender :: Int16,
+  -- | if zero, will be calculated from hhea metrics.
   sTypoDescender :: Int16,
   sTypoLineGap :: Int16,
+  -- | if zero, will be calculated from hhea metrics.
   usWinAscent :: Word16,
+  -- | if zero, will be calculated from hhea metrics.
   usWinDescent :: Word16,
   ulCodePageRange1 :: Word32,
   ulCodePageRange2 :: Word32,

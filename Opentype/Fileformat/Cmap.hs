@@ -36,32 +36,12 @@ import Data.Int
 -- and subtable `macLanguage` combination may appear only once in the
 -- `CmapTable`.
 --
--- When `platformID` is `UnicodePlatform`, `encodingID` is interpreted as follows:
--- 
---  * 0: Default semantics
---  * 1: Version 1.1 semantics
---  * 2: ISO 10646 1993 semantics (deprecated)
---  * 3: Unicode 2.0 or later semantics (BMP only)
---  * 4: Unicode 2.0 or later semantics (non-BMP characters allowed)
---  * 5: Unicode Variation Sequences
---  * 6: Full Unicode coverage (used with type 13.0 cmaps by OpenType)
---
--- When `platformID` `MacintoshPlatform`, the `encodingID` is a QuickDraw script code.
+-- When `platformID` `MacintoshPlatform`, the argument is a QuickDraw script code.
 -- 
 -- Note that the use of the Macintosh platformID is currently
 -- discouraged. Subtables with a Macintosh platformID are only
 -- required for backwards compatibility with QuickDraw and will be
 -- synthesized from Unicode-based subtables if ever needed.
---
--- When `platformID` is `MicrosoftPlatform`, the `encodingID` is a is interpreted as follows:
---
--- * 0: Symbol
--- * 1: Unicode BMP-only (UCS-2)
--- * 2: Shift-JIS
--- * 3: PRC
--- * 4: BigFive
--- * 5: Johab
--- * 10: Unicode UCS-4
 
 newtype CmapTable = CmapTable {getCmaps :: [CMap]}
   deriving Show
@@ -70,14 +50,13 @@ emptyCmapTable :: CmapTable
 emptyCmapTable = CmapTable []
 
 data CMap = CMap {
-  cmapPlatform :: PlatformID,
-  cmapEncoding :: Word16,
+  cmapPlatform :: Platform,
   -- | used only in the Macintosh platformID (/DEPRECATED/)
   cmapLanguage :: Word16,
   -- | internal format of the map
   mapFormat :: MapFormat,
   -- | set contains high byte\/word if part of multibyte\/word
-  -- character.
+  -- character.  Otherwise is ignored or set to the empty set.
   multiByte :: IS.IntSet,
   -- | map from character code to glyph index
   glyphMap :: WordMap GlyphID
@@ -85,12 +64,12 @@ data CMap = CMap {
   deriving Show
 
 instance Ord CMap where
-  compare (CMap pfID encID lang _ _ _) (CMap pfID2 encID2 lang2 _ _ _) =
-    compare (pfID, encID, lang) (pfID2, encID2, lang2)
+  compare (CMap pf lang _ _ _) (CMap pf2 lang2 _ _ _) =
+    compare (pf, lang) (pf2, lang2)
 
 instance Eq CMap where
-  (CMap pfID encID lang _ _ _) == (CMap pfID2 encID2 lang2 _ _ _) =
-    (pfID, encID, lang) == (pfID2, encID2, lang2)
+  (CMap pf lang _ _ _) == (CMap pf2 lang2 _ _ _) =
+    (pf, lang) == (pf2, lang2)
 
 data MapFormat = 
   -- | 8 bit encoding, contiguous block of bytes.  /LEGACY ONLY./
@@ -118,9 +97,8 @@ putCmapTable (CmapTable cmaps_) =
   do putWord16be 0
      putWord16be $ fromIntegral $ length cmaps
      for_ (zip offsets cmaps) $
-       \(offset, CMap pfID encID _ _ _ _) ->
-         do putPf pfID
-            putWord16be encID
+       \(offset, CMap pf _ _ _ _) ->
+         do putPf pf
             putWord32be offset
      traverse_ putLazyByteString cmapsBs
        where
@@ -138,13 +116,14 @@ readCmapTable bs = do
     fail "unsupported cmap version."
   n <- index16 bs 1
   entries <- for [0..n-1] $ \i -> do
-    pfID <- toPf =<< (index16 bs $ 2 + i*4)
-    encID <- index16 bs $ 2 + i*4 + 1
+    pf <- join $ liftM2 toPf
+      (index16 bs $ 2 + i*4)
+      (index16 bs $ 2 + i*4 + 1)
     offset <- index32 bs $ 2 + fromIntegral i*2
-    return (offset, pfID, encID)
-  cmaps <- for entries $ \(offset, pfID, encID) -> do
+    return (offset, pf)
+  cmaps <- for entries $ \(offset, pf) -> do
     cm <- readCmap $ Strict.drop (fromIntegral offset) bs
-    Right $ cm {cmapPlatform = pfID, cmapEncoding = encID}
+    Right $ cm {cmapPlatform = pf}
   return $ CmapTable cmaps
 
 putCmap :: CMap -> Put
@@ -233,7 +212,7 @@ getMap0 bs =
              filter ((/= 0).snd) $
              (flip map) [0..255] $ \c ->
              (fromIntegral c, fromIntegral $ Strict.index bs (c+2))
-       Right $ CMap UnicodePlatform 0 lang MapFormat0 IS.empty gmap
+       Right $ CMap (UnicodePlatform UnicodeDefault) lang MapFormat0 IS.empty gmap
 
 putMap2 :: CMap -> PutM ()
 putMap2 cmap = do
@@ -259,20 +238,22 @@ putMap2 cmap = do
                      (fromIntegral hb `shift` 8 .|. 0xff) $
                      glyphMap cmap
             (fstCode, lstCode)
-              | M.null subMap = (0, -1)
+              | M.null subMap = (minBound, maxBound)
               | otherwise = (fst $ M.findMin subMap,
                              fst $ M.findMax subMap)
             ec = lstCode - fstCode + 1
             rb = subCodes subMap fstCode lstCode
-        in SubTable2 (fromIntegral hb) (fromIntegral fstCode) (fromIntegral ec) 0 rb
-          where
+        in SubTable2 (fromIntegral hb) (fromIntegral fstCode)
+           (fromIntegral ec) 0 rb
       subTables = scanl calcOffset firstTable subTableCodes
       firstTable =
         SubTable2 0 0 256 (fromIntegral $ length subTableCodes * 8 + 2) $
         subCodes (glyphMap cmap) 0 255
       size :: Word16
-      size = 518 + 8 * (fromIntegral $ length subTables) + 2 * sum (map entryCount subTables)
-      calcOffset prev st = st { rangeOffset = rangeOffset prev - 8 + 2*entryCount prev }
+      size = 518 + 8 * (fromIntegral $ length subTables) +
+             2 * sum (map entryCount subTables)
+      calcOffset prev st = st {
+        rangeOffset = rangeOffset prev - 8 + 2*entryCount prev }
         
 getMap2 :: Strict.ByteString -> Either String CMap
 getMap2 bs = do
@@ -290,7 +271,7 @@ getMap2 bs = do
       Right (fromIntegral $ fstCode + entry, if p == 0 then 0 else p + delta)
   let im = M.fromAscList $ filter ((/= 0).snd) $ concat l
       is = IS.fromAscList $ map fromIntegral highBytes
-  Right $ CMap UnicodePlatform 0 lang MapFormat2 is im      
+  Right $ CMap (UnicodePlatform UnicodeDefault) lang MapFormat2 is im      
       
 data Segment4 = RangeSegment Word16 Word16 Word16
               | CodeSegment Word16 Word16 [Word16]
@@ -358,7 +339,7 @@ putMap4 cmap = do
       (codeSize, layout) = mapAccumL foldLayout (segCount*2) segments
       foldLayout offset (RangeSegment start len code) =
         (offset-2, Segment4layout (fromIntegral $ start+len-1)
-                   (fromIntegral start) (code-(fromIntegral start)) 0 [])
+                   (fromIntegral start) (code-fromIntegral start) 0 [])
       foldLayout offset (CodeSegment start len codes) =
         (offset+fromIntegral len*2-2,
          Segment4layout (fromIntegral $ start+len-1)
@@ -381,7 +362,7 @@ getMap4 bs = do
            else for [0..endCode-startCode] $ \j ->
            do glyph <- index16 bs (fromIntegral $ i + 6 + segCount*3 + idRangeOffset`div`2 + j)
               Right (fromIntegral $ startCode + j, glyph)
-    Right $ CMap UnicodePlatform 0 lang MapFormat4 IS.empty gmap
+    Right $ CMap (UnicodePlatform UnicodeDefault) lang MapFormat4 IS.empty gmap
 
 putMap6 :: CMap -> PutM ()
 putMap6 cmap = do
@@ -411,13 +392,13 @@ getMap6 bs = do
           for [0..eCount-1] $ \i -> do
     g <- index16 bs (i+3)
     Right (fromIntegral $ i + fCode, g)
-  Right $ CMap UnicodePlatform 0 lang MapFormat6 IS.empty gmap
+  Right $ CMap (UnicodePlatform UnicodeDefault) lang MapFormat6 IS.empty gmap
 
 putPacked :: Int -> [Int] -> Put
 putPacked start highBytes
   | start >= 8192 = return ()
   | otherwise = do
-      putWord8 $ foldl' (.|.) 0 $ map ((shift 1) . (.&. 7)) bytes
+      putWord8 $ foldl' (.|.) 0 $ map (shift 1 . (.&. 7)) bytes
       putPacked (start+1) rest
         where
           (bytes, rest) = span (\b -> b >= (start*8) &&
@@ -467,7 +448,7 @@ getMap8 bs = do
     end <- index32 bs (i*3 + 2051)
     glyph <- index32 bs (i*3 + 2052)
     return [(fromIntegral c, fromIntegral $ glyph+c-start) | c <- [start .. end]]
-  Right $ CMap UnicodePlatform 0 lang MapFormat8 is gmap
+  Right $ CMap (UnicodePlatform UnicodeDefault) lang MapFormat8 is gmap
 
 getMap10 :: Strict.ByteString -> Either String CMap
 getMap10 bs = do
@@ -478,7 +459,7 @@ getMap10 bs = do
           for [0..eCount-1] $ \i -> do
     g <- index16 bs (fromIntegral i+6)
     Right (fromIntegral $ i + fCode, g)
-  Right $ CMap UnicodePlatform 0 (fromIntegral lang) MapFormat6 IS.empty gmap
+  Right $ CMap (UnicodePlatform UnicodeDefault) (fromIntegral lang) MapFormat6 IS.empty gmap
 
 
 putMap10 :: CMap -> Put
@@ -523,5 +504,5 @@ getMap12 bs = do
     end <- index32 bs (i*3 + 3)
     glyph <- index32 bs (i*3 + 4)
     return [(fromIntegral c, fromIntegral $ glyph+c-start) | c <- [start .. end]]
-  Right $ CMap UnicodePlatform 0 lang MapFormat8 IS.empty gmap
+  Right $ CMap (UnicodePlatform UnicodeDefault) lang MapFormat8 IS.empty gmap
 

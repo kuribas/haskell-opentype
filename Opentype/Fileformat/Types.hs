@@ -24,14 +24,47 @@ type UFWord = Word16
 -- | the glyph index in the glyph table
 type GlyphID = Word16
 
-data PlatformID =
-  UnicodePlatform |
+data Platform =
+  UnicodePlatform UnicodeEncoding |
   -- | /DEPRECATED/
-  MacintoshPlatform |
-  MicrosoftPlatform
+  MacintoshPlatform Word16 |
+  MicrosoftPlatform MicrosoftEncoding
   deriving (Ord, Eq, Show)
 
+data MicrosoftEncoding =
+  -- | Symbol
+  MSSymbol |
+  -- | Unicode BMP-only (UCS-2)
+  MSUcs2 |
+  -- | Shift-JIS
+  ShiftJIS |
+  -- | PRC
+  PRC |
+  -- | BigFive
+  BigFive |
+  -- | Johab
+  Johab |
+  -- Unicode UCS-4
+  MSUcs4
+  deriving (Show, Eq, Ord, Enum)
 
+data UnicodeEncoding =
+  -- | Default semantics
+  UnicodeDefault |
+  -- | Version 1.1 semantics
+  UnicodeVersion1_1 |
+  -- | ISO 10646 1993 semantics (deprecated)
+  ISO_10646 |
+  -- | Unicode 2.0 or later semantics (BMP only)
+  UnicodeBmpOnly |
+  -- | Unicode 2.0 or later semantics (non-BMP characters allowed)
+  UnicodeNonBmp |
+  -- | Unicode Variation Sequences
+  UnicodeVariationSequences |
+  -- | Full Unicode coverage (used with type 13.0 cmaps by OpenType)
+  FullCoverage
+  deriving (Show, Eq, Ord, Enum)
+  
 type WordMap a = M.Map Word32 a
 -- return larged power of 2 <= i 
 iLog2 :: Integral a => a -> a
@@ -90,18 +123,58 @@ instance RealFrac ShortFrac where
 putShortFrac :: ShortFrac -> Put
 putShortFrac (ShortFrac a) = putInt16be a
 
-putPf :: PlatformID -> Put
-putPf UnicodePlatform = putWord16be 0
-putPf MacintoshPlatform = putWord16be 1
-putPf MicrosoftPlatform = putWord16be 3
+putPf :: Platform -> Put
+putPf (UnicodePlatform enc) = do
+  putWord16be 0
+  putWord16be $ case enc of
+    UnicodeDefault -> 0
+    UnicodeVersion1_1 -> 1
+    ISO_10646 -> 2
+    UnicodeBmpOnly -> 3
+    UnicodeNonBmp -> 4
+    UnicodeVariationSequences -> 5
+    FullCoverage -> 10
 
-toPf :: Word16 -> Either String PlatformID
-toPf i =
-  case i of
-    0 -> Right UnicodePlatform
-    1 -> Right MacintoshPlatform
-    3 -> Right MicrosoftPlatform
-    j -> Left $ "unknown platformID " ++ show j
+putPf (MacintoshPlatform scriptcode) = do
+  putWord16be 1
+  putWord16be scriptcode
+putPf (MicrosoftPlatform enc) = do
+  putWord16be 3
+  putWord16be $ case enc of
+    MSSymbol -> 0
+    MSUcs2 -> 1
+    ShiftJIS -> 2
+    PRC -> 3
+    BigFive -> 4
+    Johab -> 5
+    MSUcs4 -> 6
+
+toPf :: Word16 -> Word16 -> Either String Platform
+toPf 0 enc = UnicodePlatform <$>
+  case enc of
+    0 -> Right UnicodeDefault
+    1 -> Right UnicodeVersion1_1
+    2 -> Right ISO_10646
+    3 -> Right UnicodeBmpOnly
+    4 -> Right UnicodeNonBmp
+    5 -> Right UnicodeVariationSequences
+    10 -> Right FullCoverage
+    _ -> Left $ "unknown unicode encoding ID: " ++ show enc
+
+toPf 1 enc = Right $ MacintoshPlatform enc
+
+toPf 3 enc = MicrosoftPlatform <$>
+  case enc of
+    0 -> Right MSSymbol
+    1 -> Right MSUcs2
+    2 -> Right ShiftJIS
+    3 -> Right PRC
+    4 -> Right BigFive
+    5 -> Right Johab
+    6 -> Right MSUcs4
+    _ -> Left $ "unknown microsoft encoding ID: " ++ show enc
+
+toPf j _ = Left $ "unknown platformID " ++ show j
 
 index16 :: Strict.ByteString -> Word16 -> Either String Word16
 index16 bs i

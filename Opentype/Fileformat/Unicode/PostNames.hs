@@ -6,6 +6,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.HashMap.Strict as HM
 import Text.Printf
 import Data.Tuple (swap)
+import Data.List (isPrefixOf, foldl')
 import qualified Data.Vector as V
 import Data.Char
 
@@ -26,20 +27,22 @@ hasDescriptiveName cp = M.member cp codeMap
 
 nameToCodepoint :: String -> Maybe CodePoint
 nameToCodepoint name
-  | prefix == "uni" &&
-    nDigits == 4 =
-    Just $ foldl (\t d -> t*16 + fromIntegral (digitToInt d))
-    0 hexNum
-  | prefix == "u" &&
-    nDigits >= 4 &&
-    nDigits <= 6 =
-    Just $ foldl (\t d -> t*16 + fromIntegral (digitToInt d))
-    0 hexNum
-  | otherwise = HM.lookup prefix nameMap
+  | name == ".notdef" ||
+    name == ".null" = Just 0
+  | "uni" `isPrefixOf` name =
+      let hexNum = takeWhile isHexDigit $ drop 3 name
+      in if length hexNum == 4
+      then Just $ foldl' (\t d -> t*16 + fromIntegral (digitToInt d)) 0 hexNum
+      else def
+  | "u" `isPrefixOf` name =
+      let hexNum = takeWhile isHexDigit $ drop 1 name
+          nDigits = length hexNum
+      in if nDigits >= 4 && nDigits <= 6
+      then Just $ foldl' (\t d -> t*16 + fromIntegral (digitToInt d)) 0 hexNum
+      else def
+  | otherwise = def 
   where
-    (prefix, r) = span isAlpha name
-    hexNum = takeWhile isHexDigit r
-    nDigits = length hexNum
+    def = HM.lookup (takeWhile isAlpha name) nameMap
 
 nameMap :: HM.HashMap String CodePoint
 nameMap = HM.fromList $ map swap aglfn

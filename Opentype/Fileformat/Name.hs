@@ -84,7 +84,7 @@ putNameTable (NameTable records_) = do
 readNameTable :: Strict.ByteString -> Either String NameTable
 readNameTable bs = do
   version <- index16 bs 0
-  when (version > 0) $ fail "Unsupported name table format."
+  when (version > 0) $ Left "Unsupported name table format."
   len <- index16 bs 1 
   storage <- index16 bs 2
   records <- for [0..len-1] $ \i -> do

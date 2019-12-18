@@ -257,7 +257,7 @@ putMap2 cmap = do
                      (fromIntegral hb `shift` 8 .|. 0xff) $
                      glyphMap cmap
             (fstCode, lstCode)
-              | M.null subMap = (0, -1)
+              | M.null subMap = (0, maxBound)
               | otherwise = (fst $ M.findMin subMap,
                              fst $ M.findMax subMap)
             ec = lstCode - fstCode + 1

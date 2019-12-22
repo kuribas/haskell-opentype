@@ -98,7 +98,7 @@ readNameTable bs = do
   records2 <- for records $
     \(offset, len2, r) ->
       if storage+offset+len2 > fromIntegral (Strict.length bs)
-        then Left "string storage bounds exceeded"
+        then Left $ "overflow error: name record at (" <> show offset <> ") with length (" <> show len2 <> ") exceeds input length (" <> show (Strict.length bs) <> ")"
         else Right $ r (Strict.take (fromIntegral len2) $
                         Strict.drop (fromIntegral $ offset+storage) bs)
   return $ NameTable records2

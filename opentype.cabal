@@ -57,3 +57,4 @@ test-suite test
   main-is: test.hs
   buildable: True
   hs-source-dirs: tests
+  build-depends: base

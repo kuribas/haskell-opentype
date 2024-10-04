@@ -2,7 +2,7 @@ module Opentype.Fileformat.Cmap where
 import Opentype.Fileformat.Types
 import Data.Binary
 import Data.Binary.Put
-import Data.List (sort, mapAccumL, foldl')
+import Data.List (sort, mapAccumL)
 import Control.Monad
 import Data.Traversable (for)
 import Data.Foldable (for_, traverse_)
@@ -27,7 +27,7 @@ import Data.Int
 -- subtables are present. Each subtable is in one of seven possible
 -- formats and begins with a format code indicating the format
 -- used.
--- 
+--
 -- The `platformID` and platform-specific `encodingID` in the header
 -- entry (and, in the case of the Macintosh platform, the `macLanguage`
 -- field in the subtable itself) are used to specify a particular
@@ -36,7 +36,7 @@ import Data.Int
 -- `CmapTable`.
 --
 -- When `platformID` is `UnicodePlatform`, `encodingID` is interpreted as follows:
--- 
+--
 --  * 0: Default semantics
 --  * 1: Version 1.1 semantics
 --  * 2: ISO 10646 1993 semantics (deprecated)
@@ -46,7 +46,7 @@ import Data.Int
 --  * 6: Full Unicode coverage (used with type 13.0 cmaps by OpenType)
 --
 -- When `platformID` `MacintoshPlatform`, the `encodingID` is a QuickDraw script code.
--- 
+--
 -- Note that the use of the Macintosh platformID is currently
 -- discouraged. Subtables with a Macintosh platformID are only
 -- required for backwards compatibility with QuickDraw and will be
@@ -91,7 +91,7 @@ instance Eq CMap where
   (CMap pfID encID lang _ _ _) == (CMap pfID2 encID2 lang2 _ _ _) =
     (pfID, encID, lang) == (pfID2, encID2, lang2)
 
-data MapFormat = 
+data MapFormat =
   -- | 8 bit encoding, contiguous block of bytes.  /LEGACY ONLY./
   MapFormat0 |
   -- | mixed 8\/16 bit encoding with gaps.  /LEGACY ONLY./
@@ -191,7 +191,7 @@ putCodes start end _
 putCodes start end [] = do
   putWord16be 0
   putCodes (start+1) end []
-      
+
 putCodes start end l@((i, code):rest)
   | start < i = do putWord16be 0
                    putCodes (start+1) end l
@@ -251,7 +251,7 @@ putMap2 cmap = do
         IS.toList $ fst $
         IS.split 255 (multiByte cmap)
       subTableCodes =
-        filter ((/= 0) . entryCount) $ 
+        filter ((/= 0) . entryCount) $
         flip map highBytes $ \hb ->
         let subMap = subIntMap (fromIntegral hb `shift` 8)
                      (fromIntegral hb `shift` 8 .|. 0xff) $
@@ -271,7 +271,7 @@ putMap2 cmap = do
       size :: Word16
       size = 518 + 8 * (fromIntegral $ length subTables) + 2 * sum (map entryCount subTables)
       calcOffset prev st = st { rangeOffset = rangeOffset prev - 8 + 2*entryCount prev }
-        
+
 getMap2 :: Strict.ByteString -> Either String CMap
 getMap2 bs = do
   lang <- index16 bs 0
@@ -288,8 +288,8 @@ getMap2 bs = do
       Right (fromIntegral $ fstCode + entry, if p == 0 then 0 else p + delta)
   let im = M.fromAscList $ filter ((/= 0).snd) $ concat l
       is = IS.fromAscList $ map fromIntegral highBytes
-  Right $ CMap UnicodePlatform 0 lang MapFormat2 is im      
-      
+  Right $ CMap UnicodePlatform 0 lang MapFormat2 is im
+
 data Segment4 = RangeSegment Word16 Word16 Word16
               | CodeSegment Word16 Word16 [Word16]
               deriving Show
@@ -314,7 +314,7 @@ getSegments :: [(Word32, Word16)] -> [Segment4]
 getSegments [] = [RangeSegment 0xffff 1 0]
 getSegments l@((start, c):_)
   | fromIntegral end - start >= 4 ||
-    lc <= end-start+1 = 
+    lc <= end-start+1 =
       RangeSegment (fromIntegral start) (fromIntegral end-fromIntegral start+1) c :
       getSegments r
   | otherwise =
@@ -332,7 +332,7 @@ data Segment4layout = Segment4layout {
   s4idRangeOffset :: Word16,
   s4glyphIndex :: [GlyphID] }
   deriving Show
-  
+
 putMap4 :: CMap -> PutM ()
 putMap4 cmap = do
   putWord16be 4
@@ -399,7 +399,7 @@ putMap6 cmap = do
     lastCode = fromIntegral $
       min (fromIntegral (maxBound :: Word16)::Word32) $
       fst $ M.findMax (glyphMap cmap)
-    
+
 getMap6 :: Strict.ByteString -> Either String CMap
 getMap6 bs = do
   lang <- index16 bs 0
@@ -429,13 +429,13 @@ readPacked bs =
    i <- [0..7],
    a .&. (1 `shift` i) /= 0
   ]
-      
+
 
 findRanges :: [(Word32, GlyphID)] -> [(Word32, Word32, GlyphID)]
 findRanges [] = []
 findRanges l@((i,c):_) = (i, i2, c) : findRanges next
   where (i2, next) = findRange i (fromIntegral c-fromIntegral i) l
-  
+
 putMap8 :: CMap -> PutM ()
 putMap8 cmap = do
   putWord16be 8
@@ -522,4 +522,3 @@ getMap12 bs = do
     glyph <- index32 bs (i*3 + 4)
     return [(fromIntegral c, fromIntegral $ glyph+c-start) | c <- [start .. end]]
   Right $ CMap UnicodePlatform 0 lang MapFormat8 IS.empty gmap
-

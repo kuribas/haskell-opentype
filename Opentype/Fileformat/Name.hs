@@ -84,7 +84,7 @@ putNameTable (NameTable records_) = do
 readNameTable :: Strict.ByteString -> Either String NameTable
 readNameTable bs = do
   version <- index16 bs 0
-  when (version > 0) $ fail "Unsupported name table format."
+  when (version > 0) $ Left "Unsupported name table format."
   len <- index16 bs 1 
   storage <- index16 bs 2
   records <- for [0..len-1] $ \i -> do
@@ -97,8 +97,8 @@ readNameTable bs = do
     Right (offset, len2, NameRecord pf enc lang nID)
   records2 <- for records $
     \(offset, len2, r) ->
-      if storage+offset+len2 > fromIntegral (Strict.length bs)
-        then Left "string storage bounds exceeded"
+      if fromIntegral (storage+offset+len2) > Strict.length bs
+        then Left $ "overflow error: name record in storage at (" <> show storage <> ") at offset (" <> show offset <> ") with length (" <> show len2 <> ") exceeds input length (" <> show (Strict.length bs) <> ")"
         else Right $ r (Strict.take (fromIntegral len2) $
                         Strict.drop (fromIntegral $ offset+storage) bs)
   return $ NameTable records2

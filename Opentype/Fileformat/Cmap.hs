@@ -3,7 +3,6 @@ import Opentype.Fileformat.Types
 import Data.Binary
 import Data.Binary.Put
 import Data.List (sort, mapAccumL, foldl')
-import Data.Either (either)
 import Control.Monad
 import Data.Traversable (for)
 import Data.Foldable (for_, traverse_)
@@ -135,7 +134,7 @@ readCmapTable :: Strict.ByteString -> Either String CmapTable
 readCmapTable bs = do
   version <- index16 bs 0
   when (version /= 0) $
-    fail "unsupported cmap version."
+    Left "unsupported cmap version."
   n <- index16 bs 1
   entries <- for [0..n-1] $ \i -> do
     pfID <- toPf =<< (index16 bs $ 2 + i*4)
@@ -166,16 +165,15 @@ readCmap bs_ = do
   c <- index16 bs_ 0
   let bs | (c >= 8 && c < 14) = Strict.drop 8 bs_
          | otherwise = Strict.drop 4 bs_
-  either fail return $
-    case c of 
-      0 -> getMap0 bs
-      2 -> getMap2 bs
-      4 -> getMap4 bs
-      6 -> getMap6 bs
-      8 -> getMap8 bs
-      10 -> getMap10 bs
-      12 -> getMap12 bs
-      i -> fail $ "unsupported map encoding " ++ show i
+  case c of
+    0 -> getMap0 bs
+    2 -> getMap2 bs
+    4 -> getMap4 bs
+    6 -> getMap6 bs
+    8 -> getMap8 bs
+    10 -> getMap10 bs
+    12 -> getMap12 bs
+    i -> Left $ "unsupported map encoding " ++ show i
 
 subIntMap :: Word32 -> Word32 -> WordMap GlyphID -> WordMap GlyphID
 subIntMap from to intMap =
@@ -259,7 +257,7 @@ putMap2 cmap = do
                      (fromIntegral hb `shift` 8 .|. 0xff) $
                      glyphMap cmap
             (fstCode, lstCode)
-              | M.null subMap = (0, -1)
+              | M.null subMap = (0, maxBound)
               | otherwise = (fst $ M.findMin subMap,
                              fst $ M.findMax subMap)
             ec = lstCode - fstCode + 1

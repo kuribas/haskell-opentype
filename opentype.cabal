@@ -13,18 +13,18 @@ description: This library supports loading and writing of opentype files.
 category: Typography
 author: Kristof Bastiaensen
 data-dir: ""
- 
+
 source-repository head
   type: git
   location: https://github.com/kuribas/haskell-opentype
- 
+
 library
   build-depends:
                 base >=3 && <5,
                 binary >=0.8.1.0,
                 bytestring >0.10.0,
                 containers >=0.5.3,
-                ghc >=7.10.0,
+                ghc >=9.10.0,
                 microlens > 0.4.0.0,
                 microlens-th > 0.4.0.0,
                 mtl >= 2.2.1,
@@ -49,9 +49,9 @@ library
     Opentype.Fileformat.Post
     Opentype.Fileformat.Kern
     Opentype.Fileformat.OS2
-    Opentype.Fileformat.Unicode.PostNames    
+    Opentype.Fileformat.Unicode.PostNames
   ghc-options: -Wall
- 
+
 test-suite test
   type: exitcode-stdio-1.0
   main-is: test.hs
